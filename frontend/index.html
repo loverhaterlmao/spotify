@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0c0c10">
+  <meta name="description" content="Prepare Spotify playlists for audio you own or are authorized to use.">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+  <title>Soundloom — playlist audio studio</title>
+</head>
+<body>
+  <div class="ambient ambient-one"></div><div class="ambient ambient-two"></div>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="Soundloom home"><span class="brand-mark" aria-hidden="true">s</span><span>soundloom</span></a>
+    <div class="header-actions">
+      <span id="auth-state" class="auth-state" hidden></span>
+      <a id="connect-button" class="button button-quiet button-small" href="/api/auth/login" hidden>Connect Spotify</a>
+      <button id="logout-button" class="button button-quiet button-small" hidden>Disconnect</button>
+    </div>
+  </header>
+  <main>
+    <section class="hero" id="home">
+      <div class="eyebrow"><span class="live-dot"></span> YOUR PLAYLIST, READY FOR YOUR FILES</div>
+      <h1>Bring your music<br><span>into one place.</span></h1>
+      <p class="hero-copy">Preview a Spotify playlist, album, or track. Add audio you own or have permission to use, then prepare a clean download for your device.</p>
+      <form id="analyze-form" class="url-form">
+        <label class="sr-only" for="spotify-url">Spotify playlist, album, or track link</label>
+        <span class="link-icon" aria-hidden="true">↗</span>
+        <input id="spotify-url" type="text" inputmode="url" autocomplete="url" placeholder="Paste a Spotify link" required maxlength="2048">
+        <button id="paste-button" type="button" class="paste-button">Paste</button>
+        <button id="analyze-button" type="submit" class="button button-primary">Preview <span aria-hidden="true">→</span></button>
+      </form>
+      <p id="form-message" class="form-message" role="status"></p>
+      <div class="format-panel" aria-label="Audio output settings">
+        <label class="setting">
+          <span class="setting-label">Output</span>
+          <select id="format-select" aria-label="Audio format">
+            <option value="original">Original</option>
+            <option value="mp3">MP3</option>
+            <option value="aac">AAC / M4A</option>
+            <option value="flac">FLAC</option>
+            <option value="wav">WAV</option>
+            <option value="alac">ALAC</option>
+            <option value="opus">Opus</option>
+          </select>
+        </label>
+        <label class="setting" id="bitrate-setting">
+          <span class="setting-label">MP3 bitrate</span>
+          <select id="bitrate-select" aria-label="MP3 bitrate">
+            <option value="320">320 kbps</option>
+            <option value="256">256 kbps</option>
+            <option value="192">192 kbps</option>
+            <option value="128">128 kbps</option>
+          </select>
+        </label>
+        <p class="quality-note">Conversion cannot add quality beyond the audio you provide.</p>
+      </div>
+    </section>
+
+    <section id="preview-section" class="panel preview-panel" hidden aria-live="polite">
+      <div class="collection-heading">
+        <img id="preview-art" class="cover" alt="" hidden>
+        <div class="collection-info"><div class="eyebrow" id="collection-kind"></div><h2 id="collection-name"></h2><p id="collection-summary"></p></div>
+        <button id="select-all" class="button button-quiet button-small" type="button">Deselect all</button>
+      </div>
+      <div class="track-toolbar"><span id="selection-count"></span><button id="start-job" class="button button-primary" type="button">Prepare selected audio <span aria-hidden="true">→</span></button></div>
+      <div id="preview-tracks" class="track-list"></div>
+      <p class="fine-print">Spotify provides metadata here, not audio files. You’ll attach an authorized audio file to each selected track.</p>
+    </section>
+
+    <section id="job-section" class="panel job-panel" hidden aria-live="polite">
+      <div class="job-heading">
+        <div><div class="eyebrow">SERVER-SIDE JOB</div><h2 id="job-name"></h2><p id="job-subtitle" class="muted"></p></div>
+        <button id="cancel-job" class="button button-quiet button-small" type="button">Cancel job</button>
+      </div>
+      <div class="progress-card">
+        <div class="progress-top"><span id="progress-label">Waiting for audio</span><strong id="progress-number">0%</strong></div>
+        <div class="progress-track"><div id="progress-bar"></div></div>
+        <div class="progress-meta"><span id="progress-detail"></span><span id="active-detail"></span></div>
+      </div>
+      <div id="job-actions" class="job-actions"></div>
+      <div id="job-tracks" class="track-list"></div>
+      <button id="new-job" class="button button-quiet" type="button">Start another playlist</button>
+    </section>
+
+    <section class="how-it-works">
+      <div class="eyebrow">MADE FOR THE WAY YOU LISTEN</div>
+      <div class="feature-grid">
+        <article><span class="feature-icon">01</span><h3>Preview first</h3><p>Review track order and choose only what you need.</p></article>
+        <article><span class="feature-icon">02</span><h3>Add your audio</h3><p>Upload audio you own or are authorized to use. Files are matched by your selection.</p></article>
+        <article><span class="feature-icon">03</span><h3>Take it with you</h3><p>Download tracks or a playlist ZIP when server-side processing finishes.</p></article>
+      </div>
+    </section>
+  </main>
+  <footer><span>Soundloom</span><span>Spotify metadata · your authorized audio</span></footer>
+  <script src="/app.js" defer></script>
+</body>
+</html>

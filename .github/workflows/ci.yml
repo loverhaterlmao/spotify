@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install FFmpeg and Python dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          python -m pip install -r requirements-dev.txt
+      - name: Compile Python
+        run: python -m compileall -q backend tests
+      - name: Lint Python
+        run: ruff check backend tests
+      - name: Test backend and synthetic audio conversion
+        env:
+          DATA_DIR: /tmp/soundloom-ci
+        run: pytest -q
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Check frontend JavaScript syntax
+        run: node --check frontend/app.js
+      - name: Build Docker image
+        run: docker build -t soundloom:test .
