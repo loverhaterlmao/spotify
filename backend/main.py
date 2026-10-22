@@ -90,6 +90,15 @@ def throttle(request: Request, key: str, limit: int, window: int = 60) -> None:
                 request_windows.pop(old_key, None)
 
 
+def track_identity(track: dict) -> str:
+    spotify_id = track.get("spotify_id")
+    if spotify_id:
+        return f"spotify:{spotify_id}"
+    fields = (track.get("title"), track.get("artist"), track.get("album"))
+    normalized = [" ".join(str(value or "").casefold().split()) for value in fields]
+    return "metadata:" + "|".join(normalized)
+
+
 def _track_candidates(track: dict) -> list[dict]:
     try:
         candidates = json.loads(track.get("source_candidates") or "[]")
@@ -757,13 +766,12 @@ async def create_job(body: CreateJobRequest, request: Request):
     if len(source_tracks) != len(selected) or len(source_tracks) > settings.max_tracks:
         raise HTTPException(422, "The selection contains an invalid track.")
     pending_tracks = 0
-    pending_spotify_ids = set()
+    pending_track_keys = set()
     for track in source_tracks:
-        spotify_id = track.get("spotify_id")
-        if spotify_id and spotify_id in pending_spotify_ids:
+        identity = track_identity(track)
+        if identity in pending_track_keys:
             continue
-        if spotify_id:
-            pending_spotify_ids.add(spotify_id)
+        pending_track_keys.add(identity)
         pending_tracks += 1
     active_source_tasks = sum(not task.done() for task in source_search_tasks.values()) + sum(
         not task.done() for task in source_download_tasks.values()
@@ -776,10 +784,10 @@ async def create_job(body: CreateJobRequest, request: Request):
     seen: dict[str, str] = {}
     for track in source_tracks:
         track_id = uuid.uuid4().hex
-        spotify_id = track.get("spotify_id")
-        duplicate_of = seen.get(spotify_id) if spotify_id else None
-        if spotify_id and not duplicate_of:
-            seen[spotify_id] = track_id
+        duplicate_key = track_identity(track)
+        duplicate_of = seen.get(duplicate_key)
+        if not duplicate_of:
+            seen[duplicate_key] = track_id
         rows.append({
             **track, "id": track_id, "position": track["position"],
             "status": "duplicate" if duplicate_of else "searching",
