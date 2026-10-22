@@ -43,6 +43,33 @@ def test_public_spotify_embed_parses_playlist_rows_without_api_credentials():
     assert result["tracks"][0]["spotify_id"] is None
 
 
+
+def test_public_embed_next_data_preserves_spotify_ids_and_explicit_flag():
+    payload = {
+        "props": {"pageProps": {"state": {"data": {"entity": {
+            "name": "Public Mix",
+            "coverArt": {"sources": [{"url": "https://i.scdn.co/image/cover"}]},
+            "trackList": [{
+                "uri": "spotify:track:0123456789012345678901",
+                "title": "One",
+                "subtitle": "Artist",
+                "duration": 123000,
+                "isExplicit": True,
+                "entityType": "track",
+            }],
+        }}}}},
+    }
+    html = (
+        '<h1 data-testid="entity-title">Public Mix</h1>'
+        '<script id="__NEXT_DATA__" type="application/json">'
+        + json.dumps(payload)
+        + '</script>'
+    )
+    result = parse_embed_html("playlist", "1123456789012345678901", html)
+    assert result["tracks"][0]["spotify_id"] == "0123456789012345678901"
+    assert result["tracks"][0]["explicit"] is True
+    assert result["artwork"] == "https://i.scdn.co/image/cover"
+
 def test_public_spotify_embed_enforces_track_cap():
     html = """
     <h1 data-testid="entity-title">Mix</h1>

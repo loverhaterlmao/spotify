@@ -1,4 +1,5 @@
 from html.parser import HTMLParser
+import json
 import re
 from urllib.parse import urlparse
 
@@ -22,6 +23,7 @@ class _EmbedParser(HTMLParser):
         self.row = None
         self.capture = None
         self.capture_parts = []
+        self.next_data = None
 
     def handle_starttag(self, tag, attrs):
         values = dict(attrs)
@@ -32,7 +34,9 @@ class _EmbedParser(HTMLParser):
             self._art(values.get("href"))
         if tag == "img":
             self._art(values.get("src"))
-        if tag == "title":
+        if tag == "script" and values.get("id") == "__NEXT_DATA__":
+            self._begin(tag, "next_data")
+        elif tag == "title":
             self._begin(tag, "page_title")
         elif tag == "h1" and testid == "entity-title":
             self._begin(tag, "entity_title")
@@ -64,7 +68,12 @@ class _EmbedParser(HTMLParser):
         if self.capture and self.capture[0] == tag:
             field = self.capture[1]
             value = " ".join("".join(self.capture_parts).split())
-            if field == "page_title":
+            if field == "next_data":
+                try:
+                    self.next_data = json.loads(value)
+                except (TypeError, ValueError):
+                    self.next_data = None
+            elif field == "page_title":
                 self.page_title = value
             elif field == "entity_title":
                 self.entity_title = value
@@ -99,7 +108,50 @@ def parse_embed_html(kind: str, item_id: str, body: str, max_tracks: int = 50) -
     parser.feed(body)
     parser.close()
     name = parser.entity_title or parser.page_title.rsplit(" | Spotify", 1)[0] or "Spotify collection"
+    artwork = parser.artwork
     rows = parser.rows
+    entity = None
+    try:
+        entity = parser.next_data["props"]["pageProps"]["state"]["data"]["entity"]
+    except (TypeError, KeyError):
+        pass
+    if isinstance(entity, dict):
+        name = str(entity.get("name") or entity.get("title") or name)[:300]
+        cover_sources = (entity.get("coverArt") or {}).get("sources") or []
+        for cover in cover_sources:
+            if isinstance(cover, dict):
+                before = parser.artwork
+                parser._art(cover.get("url"))
+                if parser.artwork:
+                    artwork = parser.artwork
+                    break
+        embed_rows = entity.get("trackList")
+        if isinstance(embed_rows, list):
+            normalized_rows = []
+            for row in embed_rows:
+                if not isinstance(row, dict) or row.get("entityType") not in {None, "track"}:
+                    continue
+                title = str(row.get("title") or "").strip()
+                if not title:
+                    continue
+                try:
+                    duration = int(row.get("duration") or 0)
+                except (TypeError, ValueError):
+                    duration = 0
+                uri = str(row.get("uri") or "")
+                track_match = re.fullmatch(r"spotify:track:([A-Za-z0-9]{22})", uri)
+                normalized_rows.append({
+                    "position": len(normalized_rows) + 1,
+                    "title": title[:300],
+                    "artist": str(row.get("subtitle") or "Unknown artist")[:300],
+                    "duration_ms": duration if 0 < duration <= 4 * 60 * 60 * 1000 else None,
+                    "spotify_id": track_match.group(1) if track_match else None,
+                    "explicit": bool(row.get("isExplicit", False)),
+                })
+            if normalized_rows:
+                rows = normalized_rows
+    if len(rows) > max_tracks:
+        raise SpotifyError(f"This public Spotify embed exceeds the {max_tracks}-track limit. Import a CSV instead.")
     if not rows and kind == "track" and parser.entity_title:
         rows = [{
             "position": 1,
@@ -115,22 +167,23 @@ def parse_embed_html(kind: str, item_id: str, body: str, max_tracks: int = 50) -
     for index, row in enumerate(rows, 1):
         tracks.append({
             "position": index,
-            "spotify_id": item_id if kind == "track" else None,
+            "spotify_id": row.get("spotify_id") or (item_id if kind == "track" else None),
             "title": row["title"] or "Unknown title",
             "artist": row["artist"] or parser.subtitle or "Unknown artist",
             "album": name if kind == "album" else "",
             "duration_ms": row.get("duration_ms"),
             "isrc": None,
-            "explicit": False,
-            "artwork": parser.artwork,
+            "explicit": bool(row.get("explicit", False)),
+            "artwork": artwork,
             "track_number": index,
             "disc_number": 1,
         })
     return {
         "kind": kind,
         "name": name,
-        "artwork": parser.artwork,
+        "artwork": artwork,
         "tracks": tracks,
+        "metadata_note": "Public embeds may show only a preview subset. Import CSV if the track count looks incomplete.",
     }
 
 

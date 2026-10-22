@@ -4,7 +4,7 @@ Soundloom is a mobile-first Spotify playlist-to-audio app. Spotify supplies meta
 
 ## What works
 
-- Spotify track, album, public playlist, and Spotify URI parsing. Public embeds provide a credential-free preview capped at 50 rows; configured Spotify Web API access supports pagination, richer metadata, and private playlists.
+- Spotify track, album, public playlist, and Spotify URI parsing. Public embeds provide credential-free rows up to the configured 50-row cap, but Spotify may expose only a preview subset; the UI flags this and CSV import is the complete-list fallback. Configured Spotify Web API access supports pagination, richer metadata, and private playlists.
 - Playlist CSV import for mobile users who cannot create a Spotify developer app. Export the playlist through TuneMyMusic using Spotify sign-in, then upload the CSV; Soundloom does not store the CSV after parsing.
 - Optional Spotify OAuth for private and collaborative playlists using the documented Web API scopes playlist-read-private and playlist-read-collaborative.
 - Automatic matching across enabled audio adapters: Internet Archive's declared license metadata and optional YouTube searches restricted to operator-licensed channel IDs. High-confidence, unique title/artist/duration matches (or strong ISRC matches) download automatically; uncertain matches are held for review, and mismatched live, remix, acoustic, cover, or other version markers block automatic selection.
@@ -70,7 +70,7 @@ Render's `PORT` is used by the included Dockerfile. The browser can leave while 
 ## Use on iPhone
 
 1. Open the deployed HTTPS URL in Safari.
-2. Paste a public Spotify link for a collection of up to 50 tracks. For larger playlists, use [TuneMyMusic's Spotify-to-file exporter](https://www.tunemymusic.com/transfer/spotify-to-file), sign in through its authorization page, and export a CSV. Private playlists still need the configured Spotify OAuth connection.
+2. Paste a public Spotify link to preview the rows Spotify exposes. Compare the shown count with the playlist; if it is incomplete or over 50 tracks, use [TuneMyMusic's Spotify-to-file exporter](https://www.tunemymusic.com/transfer/spotify-to-file), sign in through its authorization page, and export a CSV. Private playlists still need the configured Spotify OAuth connection.
 3. Return to Soundloom, tap **Import CSV**, select the exported file from Files, then choose tracks and an output format.
 4. Soundloom searches enabled authorized sources. Review uncertain matches before downloading; tracks without a permitted match stay unavailable. You can also tap **Add audio** to select a file you own or may use from Files.
 5. Leave the page if needed; the server keeps processing. Return in Safari on the same device to see saved job progress and download individual files or the ZIP.

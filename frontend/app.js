@@ -39,7 +39,8 @@ function renderPreview(data) {
   $("#collection-kind").textContent = data.kind.toUpperCase();
   $("#collection-name").textContent = data.name;
   const totalSeconds = data.tracks.reduce((sum, track) => sum + (track.duration_ms || 0), 0) / 1000;
-  $("#collection-summary").textContent = data.tracks.length + " tracks · " + Math.floor(totalSeconds / 60) + " min";
+  const collectionSummary = data.tracks.length + " tracks · " + Math.floor(totalSeconds / 60) + " min";
+  $("#collection-summary").textContent = collectionSummary + (data.metadata_note ? " · " + data.metadata_note : "");
   const cover = $("#preview-art");
   if (data.artwork && artwork(data.artwork, data.name).includes("<img")) {
     cover.src = data.artwork;
