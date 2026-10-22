@@ -243,6 +243,7 @@ async def run_track(job_id: str, track_id: str) -> None:
                  "track": str(track["track_number"] or track["position"]),
                  "disc": str(track["disc_number"] or 1)},
                 settings.ffmpeg_timeout_seconds, on_progress,
+                source_info=source_info,
             )
             if stored_bytes(job_root) > settings.max_uploads_per_job_bytes:
                 Path(result["output_path"]).unlink(missing_ok=True)

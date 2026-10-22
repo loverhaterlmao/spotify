@@ -228,7 +228,8 @@ class InternetArchiveSource:
         params = [
             ("q", " AND ".join(clauses)),
             ("fl[]", "identifier"),
-            ("rows", str(self.max_results)),
+            ("fl[]", "licenseurl"),
+            ("rows", str(self.max_results * 2)),
             ("page", "1"),
             ("output", "json"),
         ]
@@ -237,6 +238,13 @@ class InternetArchiveSource:
         docs = response.get("docs", []) if isinstance(response, dict) else []
         identifiers = []
         for doc in (docs if isinstance(docs, list) else []):
+            if not isinstance(doc, dict):
+                continue
+            # Skip records whose indexed license is known to fall outside the allowlist.
+            # Blank or missing fields remain unknown and still get authoritative metadata checks.
+            declared_license = _first(doc.get("licenseurl") or doc.get("license_url"))
+            if declared_license and not _license(doc):
+                continue
             try:
                 identifier = _safe_identifier(doc.get("identifier"))
             except ArchiveSourceError:
@@ -253,10 +261,19 @@ class InternetArchiveSource:
                     identifiers.append(identifier)
                 if len(identifiers) >= self.max_results:
                     break
+        identifiers = identifiers[:self.max_results]
+        metadata_slots = asyncio.Semaphore(4)
+
+        async def fetch_metadata(identifier: str) -> dict:
+            async with metadata_slots:
+                return await self._json(f"{self.base_url}/metadata/{quote(identifier, safe='')}")
+
+        # Bound detail lookups and overlap network latency while the shared host pacer
+        # continues to respect the catalog request interval.
+        payloads = await asyncio.gather(*(fetch_metadata(identifier) for identifier in identifiers))
         candidates: list[dict] = []
         seen: set[str] = set()
-        for identifier in identifiers[:self.max_results]:
-            payload = await self._json(f"{self.base_url}/metadata/{quote(identifier, safe='')}")
+        for identifier, payload in zip(identifiers, payloads):
             item_metadata = payload.get("metadata", {})
             if not isinstance(item_metadata, dict) or not isinstance(payload.get("files"), list):
                 continue

@@ -39,6 +39,23 @@ Requires Python 3.12, FFmpeg/FFprobe, and a Spotify developer app for metadata l
 
 Spotify Web API access depends on the developer account, app mode, granted scopes, and Spotify's current endpoint availability and rate limits. Credentials stay on the server. Private-playlist OAuth sessions are held in memory and must reconnect after a service restart.
 
+## Free local use on iPhone
+
+For a zero-hosting-bill setup, run the Docker app on a computer you own and open it from Safari on the same Wi-Fi network. This keeps the job database and audio in a Docker named volume, and the host machine performs FFmpeg work. It costs no app-hosting fee, but the computer must stay on and the app is only reachable on your local network.
+
+1. Install Docker Desktop on the host computer and copy `.env.example` to `.env`. Add Spotify credentials if you want metadata lookup; public playlists work without Spotify OAuth.
+2. Start Soundloom with `docker compose up --build -d`.
+3. Find the computer's local Wi-Fi address and open `http://<computer-LAN-IP>:8000` in iPhone Safari.
+4. Use `docker compose logs -f` to inspect the service. `docker compose down` preserves job data; `docker compose down -v` deletes the named data volume.
+
+Do not expose this local HTTP service directly to the public internet. Private-playlist OAuth requires a registered HTTPS callback; use public playlists on this LAN setup unless you configure a secure HTTPS reverse proxy.
+
+## Performance and cost
+
+The app keeps processing on one bounded server process and avoids a paid Redis dependency. Track conversion reuses the source's FFprobe result instead of probing the same file twice. Licensed-catalog lookups first inspect the indexed license field, fetch detailed metadata only for potentially eligible items, and overlap up to four detail requests per track while preserving the shared Internet Archive request pace. These are workload optimizations, not a universal speed ranking; audio-source rate limits and FFmpeg encoding remain the main throughput limits.
+
+Spotify's Web API and Internet Archive access do not require a per-download fee. Reliable public background processing and persistent storage do require a paid host or storage plan: Render's free service has no persistent disk and can sleep or restart, which can interrupt jobs and erase downloads. The optional `render-free.yaml` is a small, non-durable preview profile; use the regular `render.yaml` for durable server-side jobs.
+
 ## Deploy on Render
 
 1. In Render, choose **New + → Blueprint**, connect this GitHub repository, and apply the included `render.yaml`. It creates a Docker web service with FFmpeg, a health check, and a persistent 25 GB disk mounted at `/data`. The disk requires a paid Render plan.

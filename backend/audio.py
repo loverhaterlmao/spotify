@@ -134,8 +134,11 @@ async def convert_audio(
     metadata: dict[str, str],
     timeout_seconds: int,
     on_progress: Callable[[float], Awaitable[None]],
+    *,
+    source_info: dict | None = None,
 ) -> dict:
-    source_info = await probe_audio(source, verify_signal=False)
+    if source_info is None:
+        source_info = await probe_audio(source, verify_signal=False)
     destination.parent.mkdir(parents=True, exist_ok=True)
     if output_format == "original":
         extension = source.suffix.lower()

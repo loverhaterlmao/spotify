@@ -1,0 +1,35 @@
+services:
+  - type: web
+    name: soundloom-free-preview
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    envVars:
+      - key: DATA_DIR
+        value: /data
+      - key: MAX_UPLOAD_BYTES
+        value: "67108864"
+      - key: MAX_TRACKS_PER_JOB
+        value: "30"
+      - key: MAX_ENCODERS
+        value: "1"
+      - key: ARCHIVE_SEARCH_CONCURRENCY
+        value: "1"
+      - key: MAX_PENDING_SOURCE_TASKS
+        value: "100"
+      - key: MAX_JOB_STORAGE_BYTES
+        value: "268435456"
+      - key: MAX_TOTAL_STORAGE_BYTES
+        value: "536870912"
+      - key: RETENTION_DAYS
+        value: "1"
+      - key: SPOTIFY_CLIENT_ID
+        sync: false
+      - key: SPOTIFY_CLIENT_SECRET
+        sync: false
+      - key: SPOTIFY_REDIRECT_URI
+        sync: false
+      - key: PUBLIC_BASE_URL
+        sync: false

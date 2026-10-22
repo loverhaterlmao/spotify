@@ -10,6 +10,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+import backend.audio as audio
 from backend.audio import AudioError, convert_audio, output_options, probe_audio, safe_filename
 from backend.archive_source import ArchiveSourceError, InternetArchiveSource, supported_license
 from backend.matching import rank_candidates, score_candidate
@@ -221,6 +222,7 @@ def test_synthetic_wav_is_encoded_and_verified(tmp_path):
             source, tmp_path / "converted" / "tone", "mp3", "128",
             {"title": "Synthetic tone", "artist": "Test", "album": "Fixture"},
             30, on_progress,
+            source_info=await probe_audio(source),
         )
 
     result = asyncio.run(run())
@@ -265,7 +267,8 @@ def test_internet_archive_search_filters_licenses_and_returns_audio_candidates()
         calls.append(request.url)
         if request.url.path == "/advancedsearch.php":
             return httpx.Response(200, json={"response": {"docs": [
-                {"identifier": "licensed-item"}, {"identifier": "unlicensed-item"}
+                {"identifier": "licensed-item", "licenseurl": "http://creativecommons.org/licenses/by/4.0/"},
+                {"identifier": "unlicensed-item", "licenseurl": "https://creativecommons.org/licenses/by-nc/4.0/"},
             ]}})
         identifier = request.url.path.rsplit("/", 1)[-1]
         metadata = {
@@ -297,6 +300,7 @@ def test_internet_archive_search_filters_licenses_and_returns_audio_candidates()
             assert len(candidates) == 1
             assert candidates[0]["license_name"] == "CC BY 4.0"
             assert ranked[0]["auto_match"] is True
+            assert sum(url.path.startswith("/metadata/") for url in calls) == 1
             assert all(url.host == "archive.org" for url in calls)
         finally:
             await client.aclose()

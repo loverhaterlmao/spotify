@@ -1,0 +1,17 @@
+services:
+  soundloom:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATA_DIR: /data
+    ports:
+      - "${SOUNDLOOM_PORT:-8000}:8000"
+    volumes:
+      - soundloom-data:/data
+
+volumes:
+  soundloom-data:
