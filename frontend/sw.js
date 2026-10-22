@@ -1,4 +1,4 @@
-const CACHE = "soundloom-static-v1";
+const CACHE = "soundloom-static-v2";
 const STATIC = ["/", "/style.css", "/app.js", "/manifest.webmanifest", "/icon.svg"];
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(STATIC)));
