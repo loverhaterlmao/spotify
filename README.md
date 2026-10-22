@@ -38,14 +38,15 @@ Requires Python 3.12, FFmpeg/FFprobe, and a Spotify developer app for metadata l
 
 Spotify Web API access depends on the developer account, app mode, granted scopes, and Spotify's current endpoint availability and rate limits. Credentials stay on the server. Private-playlist OAuth sessions are held in memory and must reconnect after a service restart.
 
-## Railway
+## Deploy on Render
 
-1. Push this repository to GitHub and create a Railway service from the repository. The included Dockerfile installs FFmpeg and runs the app as an unprivileged user. railway.toml declares the /data volume and /health health check.
-2. Set SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET, SPOTIFY_REDIRECT_URI, and PUBLIC_BASE_URL in the Railway service. The redirect URI should be https://<your-domain>/api/auth/callback and must match the Spotify developer dashboard exactly. Railway provides PORT.
-3. Attach a persistent volume at /data. Use a single replica: SQLite state, local temporary audio, and the in-process worker queue are designed for one service instance.
-4. Deploy, wait for /health to pass, then open the Railway public domain on the phone.
+1. In Render, choose **New + → Blueprint**, connect this GitHub repository, and apply the included `render.yaml`. It creates a Docker web service with FFmpeg, a health check, and a persistent 25 GB disk mounted at `/data`. The disk requires a paid Render plan.
+2. In the Render service environment, set `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET` from your Spotify developer app.
+3. After Render assigns the service URL, set `PUBLIC_BASE_URL` to that HTTPS origin and `SPOTIFY_REDIRECT_URI` to `<PUBLIC_BASE_URL>/api/auth/callback`. Register that exact callback URL in the Spotify developer dashboard, then redeploy.
+4. Keep one service instance. SQLite state, temporary audio, and the in-process worker queue require a single instance with the persistent disk attached.
+5. Wait for the `/health` check to pass and open the Render service URL on your phone.
 
-The browser can leave while uploaded tracks are being processed because work runs on the server. Keep the service and /data volume online until downloads finish. Jobs and temporary files are removed after RETENTION_DAYS; cleanup runs at service startup and hourly. SQLite is not object storage, so set storage limits to suit the volume. Protect the service and its volume as private user data.
+Render's `PORT` is used by the included Dockerfile. The browser can leave while uploaded tracks are processed because the work runs server-side. Keep the service and disk online until downloads finish. Jobs and temporary files expire after `RETENTION_DAYS`; cleanup runs at startup and hourly. SQLite is not object storage, so set storage limits to fit the disk. Protect the service and disk as private user data.
 
 ## Use on iPhone
 
@@ -83,6 +84,6 @@ Install developer checks with pip install -r requirements-dev.txt, then run DATA
 
 - Users provide the audio. The app does not search public sites, download from streaming services, or infer a source match.
 - Spotify API access and private playlist visibility depend on the configured Spotify developer app. Spotify may limit access to certain endpoints or accounts.
-- OAuth sessions are process-memory sessions, while jobs and uploaded audio persist in SQLite and the mounted volume. One Railway replica is required.
+- OAuth sessions are process-memory sessions, while jobs and uploaded audio persist in SQLite and the mounted volume. One Render service instance is required.
 - Upload progress and FFmpeg progress are reported; there is no ETA because the workload and storage performance vary.
 - Archive artwork is not embedded into each converted file. Original format preserves the original file, including its existing metadata and artwork; converted formats receive Spotify title, artist, album, and track tags.

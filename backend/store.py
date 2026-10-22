@@ -109,7 +109,7 @@ class Store:
     def recoverable(self) -> list[dict[str, Any]]:
         with self.lock:
             return [dict(r) for r in self.db.execute(
-                "SELECT * FROM tracks WHERE status IN ('queued','processing') AND input_path IS NOT NULL"
+                "SELECT * FROM tracks WHERE (status IN ('queued','processing') AND input_path IS NOT NULL) OR status='uploading'"
             ).fetchall()]
 
     def old_jobs(self, before_epoch: float) -> list[dict[str, Any]]:
