@@ -1,18 +1,19 @@
 # Soundloom
 
-Soundloom is a mobile-first Spotify metadata preview and authorized-audio preparation app. Spotify supplies track and playlist metadata; it does not supply downloadable audio. Soundloom never extracts Spotify audio or bypasses DRM, paywalls, or sign-in restrictions. A user attaches a local audio file they own or are authorized to use to each selected Spotify track.
+Soundloom is a mobile-first Spotify metadata and authorized-audio preparation app. Spotify supplies track and playlist metadata; it does not supply downloadable audio. Soundloom never extracts Spotify audio or bypasses DRM, paywalls, or sign-in restrictions. It searches Internet Archive for files explicitly declared as CC0, CC BY, CC BY-SA, or public domain, then lets users attach their own audio when no eligible match is found.
 
 ## What works
 
 - Spotify track, album, public playlist, and Spotify URI parsing, with paginated playlist metadata (up to the configured track limit), ordering, artwork previews, and duplicate detection.
 - Optional Spotify OAuth for private and collaborative playlists using the documented Web API scopes playlist-read-private and playlist-read-collaborative.
-- Manual per-track audio upload, decodable-audio verification, bounded asynchronous FFmpeg work, real encoder progress, cancellation, retry of failures, and job recovery from a persistent SQLite database after a process restart.
+- Automatic Internet Archive search and metadata matching against explicitly licensed audio. High-confidence, unique title/artist/duration matches (or strong ISRC matches) download automatically; uncertain matches are held for review, and mismatched live, remix, acoustic, cover, or other version markers block automatic selection.
+- Per-track match review and replacement selection, retryable source searches, manual per-track audio upload, decodable-audio verification, bounded asynchronous FFmpeg work, real encoder progress, cancellation, and job recovery from a persistent SQLite database after a process restart.
 - Original, MP3 (128/192/256/320 kbps), AAC/M4A, FLAC, WAV, ALAC, and Opus output. The app reports source bitrate and whether a lossless output came from a detected lossless source. Transcoding does not restore missing fidelity.
 - Individual downloads and a disk-built ZIP with safe numbered filenames, Spotify cover artwork when available, playlist.m3u8, and manifest.json. ZIP creation does not buffer all audio in RAM.
 - Mobile-responsive PWA interface, reduced-motion support, installable home-screen entry, a progress view that survives page refresh, and static-only offline caching.
 - Upload, playlist-size, FFmpeg-timeout, encoder-concurrency, per-job upload-storage, and job-retention limits.
 
-There is no automatic third-party audio search or source matching in this deployment. Every audio file is selected by the user for an exact track row, which avoids silently substituting a cover, remix, or live version. A future source adapter should be connected only to a provider with explicit authorization to download and redistribute the selected audio. The AudioSource protocol in **backend/sources.py** is the extension point.
+Source search is limited to Internet Archive records with an explicit CC0, CC BY, CC BY-SA, or Public Domain Mark license URL in the item's metadata. That license declaration is supplied by the uploader; Soundloom records the item link, attribution, and license in the job manifest and ZIP, and users should inspect the source page before relying on it. CC BY requires attribution; CC BY-SA may require adaptations to carry the same or a compatible license. Soundloom does not search streaming services or general video sites. Many commercial Spotify tracks will have no authorized match. Matching scores are similarity measures, not probabilities; anything ambiguous waits for user review. New authorized providers can implement the SearchableAudioSource protocol in **backend/sources.py**.
 
 ## Local development
 
@@ -46,14 +47,14 @@ Spotify Web API access depends on the developer account, app mode, granted scope
 4. Keep one service instance. SQLite state, temporary audio, and the in-process worker queue require a single instance with the persistent disk attached.
 5. Wait for the `/health` check to pass and open the Render service URL on your phone.
 
-Render's `PORT` is used by the included Dockerfile. The browser can leave while uploaded tracks are processed because the work runs server-side. Keep the service and disk online until downloads finish. Jobs and temporary files expire after `RETENTION_DAYS`; cleanup runs at startup and hourly. SQLite is not object storage, so set storage limits to fit the disk. Protect the service and disk as private user data.
+Render's `PORT` is used by the included Dockerfile. The browser can leave while source searches, downloads, and audio processing run server-side. Keep the service and disk online until downloads finish. Jobs and temporary files expire after `RETENTION_DAYS`; cleanup runs at startup and hourly. SQLite is not object storage, so set storage limits to fit the disk. Protect the service and disk as private user data.
 
 ## Use on iPhone
 
 1. Open the deployed HTTPS URL in Safari.
 2. Paste an open.spotify.com track, album, or playlist link, or a Spotify URI. If the item is private, tap **Connect Spotify** and grant playlist access.
 3. Choose the output format and preview the ordered track list.
-4. For each selected track, tap **Add audio** and choose an authorized file in Files. Repeat for the tracks you want.
+4. Soundloom searches licensed sources automatically. Review any suggested match that needs approval and choose **Use match**, or tap **Add audio** to select a file you own or may use from Files.
 5. Leave the page if needed; the server keeps processing. Return in Safari on the same device to see saved job progress and download individual songs or the ZIP.
 6. To add the app icon, use Safari's Share button, then **Add to Home Screen**.
 
@@ -70,6 +71,9 @@ Large exports are served as a file response from disk rather than loaded as a br
 | MAX_UPLOAD_BYTES | 200 MiB | Maximum per uploaded track |
 | MAX_TRACKS_PER_JOB | 300 | Maximum resolved tracks in one job |
 | MAX_ENCODERS | 2 | Concurrent FFmpeg encoders (1–4) |
+| ARCHIVE_SEARCH_CONCURRENCY | 2 | Concurrent Internet Archive requests (1–4) |
+| MAX_PENDING_SOURCE_TASKS | 600 | Bound queued searches and downloads across jobs |
+| AUTO_MATCH_THRESHOLD | 0.94 | Minimum match score for automatic download (0.80–0.99) |
 | MAX_JOB_STORAGE_BYTES | 8 GiB | Per-job total temporary storage cap |
 | MAX_TOTAL_STORAGE_BYTES | 20 GiB | Service-wide temporary storage cap |
 | FFMPEG_TIMEOUT_SECONDS | 1800 | Conversion timeout per track |
@@ -78,12 +82,12 @@ Large exports are served as a file response from disk rather than loaded as a br
 
 ## Tests
 
-Install developer checks with pip install -r requirements-dev.txt, then run DATA_DIR=/tmp/soundloom-test-data pytest. Tests use synthetic bytes and metadata only; no commercial recordings or network calls are required. Audio conversion integration requires FFmpeg installed. The shell workspace used to author this commit was unavailable, so the repository tests and Docker build have not been run here.
+Install developer checks with pip install -r requirements-dev.txt, then run DATA_DIR=/tmp/soundloom-test-data pytest. Tests use synthetic audio and mocked provider metadata only; no commercial recordings or live provider requests are required. Audio conversion integration requires FFmpeg installed. The shell workspace used to author this commit was unavailable, so the repository tests and Docker build have not been run here.
 
 ## Current boundaries
 
-- Users provide the audio. The app does not search public sites, download from streaming services, or infer a source match.
+- Automatic source availability depends on Internet Archive catalog results and explicit license metadata. An uploader's declaration is not an independent rights audit; inspect the item and license before reuse. No streaming-service or video-site downloads are implemented.
 - Spotify API access and private playlist visibility depend on the configured Spotify developer app. Spotify may limit access to certain endpoints or accounts.
 - OAuth sessions are process-memory sessions, while jobs and uploaded audio persist in SQLite and the mounted volume. One Render service instance is required.
-- Upload progress and FFmpeg progress are reported; there is no ETA because the workload and storage performance vary.
+- Source download and FFmpeg progress are reported; search has no ETA because provider response times and catalog results vary.
 - Archive artwork is not embedded into each converted file. Original format preserves the original file, including its existing metadata and artwork; converted formats receive Spotify title, artist, album, and track tags.

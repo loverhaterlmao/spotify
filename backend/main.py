@@ -25,6 +25,8 @@ from .config import settings
 from .spotify import SpotifyClient, SpotifyError
 from .store import Store
 from .sources import SuppliedAudio, UserUploadSource
+from .archive_source import ArchiveSourceError, InternetArchiveSource
+from .matching import rank_candidates
 
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
@@ -37,7 +39,11 @@ storage_reservations: dict[str, int] = defaultdict(int)
 request_windows: dict[str, deque] = defaultdict(deque)
 store: Store | None = None
 spotify = SpotifyClient(settings.spotify_client_id, settings.spotify_client_secret, settings.spotify_redirect_uri)
+archive_source = InternetArchiveSource()
 encoder_slots: asyncio.Semaphore | None = None
+source_slots: asyncio.Semaphore | None = None
+source_search_tasks: dict[str, asyncio.Task] = {}
+source_download_tasks: dict[str, asyncio.Task] = {}
 
 
 class AnalyzeRequest(BaseModel):
@@ -83,10 +89,27 @@ def throttle(request: Request, key: str, limit: int, window: int = 60) -> None:
                 request_windows.pop(old_key, None)
 
 
+def _track_candidates(track: dict) -> list[dict]:
+    try:
+        candidates = json.loads(track.get("source_candidates") or "[]")
+    except (TypeError, json.JSONDecodeError):
+        return []
+    return [candidate for candidate in candidates if isinstance(candidate, dict)][:5]
+
+
 def track_view(track: dict, token: str, job_id: str, rows: list[dict] | None = None) -> dict:
     output = resolve_output(job_id, track["id"], rows)
     downloadable = output is not None
     ext = output.suffix if output else ""
+    source = None
+    if track.get("source_name"):
+        source = {
+            "name": track["source_name"], "url": track.get("source_url"),
+            "license": track.get("source_license"), "license_url": track.get("source_license_url"),
+            "attribution": track.get("source_attribution"),
+            "match_score": track.get("source_confidence"),
+            "auto_matched": bool(track.get("source_auto")),
+        }
     return {
         "id": track["id"], "position": track["position"], "spotify_id": track["spotify_id"],
         "title": track["title"], "artist": track["artist"], "album": track["album"],
@@ -94,6 +117,7 @@ def track_view(track: dict, token: str, job_id: str, rows: list[dict] | None = N
         "disc_number": track["disc_number"], "isrc": track["isrc"], "status": track["status"],
         "progress": round(float(track["progress"] or 0), 1), "error": track["error"],
         "source_bitrate": track["source_bitrate"], "lossless_from_source": track["lossless_from_source"],
+        "source": source, "source_candidates": _track_candidates(track),
         "duplicate": track["status"] == "duplicate",
         "download_url": f"/api/jobs/{job_id}/tracks/{track['id']}/download?{urlencode({'token': token})}" if downloadable else None,
         "filename": f"{track['position']:02d} - {safe_filename(track['artist'])} - {safe_filename(track['title'])}{ext}" if downloadable else None,
@@ -108,19 +132,22 @@ def job_view(job: dict, token: str) -> dict:
     progress = round(100 * sum(
         100 if t["status"] in done_states else float(t["progress"] or 0) for t in tracks
     ) / max(1, total), 1)
-    counts = {state: sum(1 for t in tracks if t["status"] == state) for state in
-              ("awaiting_upload", "uploading", "queued", "processing", "completed", "failed", "duplicate", "cancelled")}
-    active = any(t["status"] in {"awaiting_upload", "uploading", "queued", "processing"} for t in tracks)
+    states = (
+        "awaiting_upload", "uploading", "searching", "downloading", "needs_review",
+        "queued", "processing", "completed", "failed", "duplicate", "cancelled",
+    )
+    counts = {state: sum(1 for t in tracks if t["status"] == state) for state in states}
+    active_states = {"awaiting_upload", "uploading", "searching", "downloading", "needs_review", "queued", "processing"}
+    active = any(t["status"] in active_states for t in tracks)
+    busy = counts["searching"] or counts["downloading"] or counts["processing"] or counts["queued"]
     if not active and counts["failed"]:
         status = "partial" if counts["completed"] else "failed"
     elif not active and counts["completed"] + counts["duplicate"] > 0:
         status = "completed"
     elif not active:
         status = "cancelled"
-    elif counts["processing"] or counts["queued"]:
-        status = "processing"
     else:
-        status = "awaiting_upload"
+        status = "processing" if busy else "awaiting_action"
     database().set_job_status(job["id"], status)
     return {
         "id": job["id"], "name": job["name"], "kind": job["kind"], "artwork": job["artwork"],
@@ -136,11 +163,14 @@ async def refresh_job(job_id: str) -> None:
     job = database().job(job_id)
     if job:
         rows = database().tracks(job_id)
-        active = any(t["status"] in {"awaiting_upload", "uploading", "queued", "processing"} for t in rows)
+        active_states = {"awaiting_upload", "uploading", "searching", "downloading", "needs_review", "queued", "processing"}
+        active = any(t["status"] in active_states for t in rows)
         failed = any(t["status"] == "failed" for t in rows)
         completed = any(t["status"] == "completed" for t in rows)
-        status = "processing" if active else ("partial" if failed and completed else
-                 "failed" if failed else "completed" if completed else "cancelled")
+        busy = any(t["status"] in {"searching", "downloading", "queued", "processing"} for t in rows)
+        status = ("processing" if busy else "awaiting_action") if active else (
+            "partial" if failed and completed else "failed" if failed else "completed" if completed else "cancelled"
+        )
         database().set_job_status(job_id, status)
 
 
@@ -250,6 +280,171 @@ def start_track(job_id: str, track_id: str) -> None:
     track_tasks[track_id] = asyncio.create_task(run_track(job_id, track_id))
 
 
+def start_source_search(job_id: str, track_id: str) -> None:
+    existing = source_search_tasks.get(track_id)
+    if existing and not existing.done():
+        return
+    source_search_tasks[track_id] = asyncio.create_task(search_source_track(job_id, track_id))
+
+
+async def search_source_track(job_id: str, track_id: str) -> None:
+    try:
+        track = database().track(job_id, track_id)
+        if not track or track["status"] != "searching":
+            return
+        if source_slots is None:
+            raise ArchiveSourceError("The licensed audio search queue is not ready.")
+        async with source_slots:
+            raw = await archive_source.search(track, settings.max_upload_bytes)
+        ranked = rank_candidates(track, raw, settings.auto_match_threshold)
+        candidates = [candidate for candidate in ranked if candidate["score"] >= 0.45][:5]
+        database().set_track(
+            track_id, source_candidates=json.dumps(candidates, ensure_ascii=False),
+            progress=0, error=None,
+        )
+        if candidates and candidates[0]["auto_match"]:
+            start_candidate_download(job_id, track_id, candidates[0]["id"], automatic=True)
+        elif candidates:
+            database().set_track(
+                track_id, status="needs_review",
+                error="Review the licensed matches and choose one, or attach your own audio.",
+            )
+        else:
+            database().set_track(
+                track_id, status="awaiting_upload",
+                error="No clearly matching, explicitly licensed recording was found. Retry or attach your own audio.",
+            )
+        await refresh_job(job_id)
+    except asyncio.CancelledError:
+        raise
+    except ArchiveSourceError:
+        logger.info("authorized source search failed job=%s track=%s", job_id, track_id)
+        track = database().track(job_id, track_id)
+        if track and track["status"] == "searching":
+            database().set_track(
+                track_id, status="awaiting_upload", progress=0,
+                error="The licensed source catalog is unavailable. Retry the search or attach your own audio.",
+            )
+    except Exception as exc:
+        logger.info("authorized source matching failed job=%s track=%s reason=%s", job_id, track_id, type(exc).__name__)
+        track = database().track(job_id, track_id)
+        if track and track["status"] == "searching":
+            database().set_track(
+                track_id, status="awaiting_upload", progress=0,
+                error="Source matching could not finish. Retry the search or attach your own audio.",
+            )
+    finally:
+        task = asyncio.current_task()
+        if source_search_tasks.get(track_id) is task:
+            source_search_tasks.pop(track_id, None)
+        await refresh_job(job_id)
+
+
+def start_candidate_download(job_id: str, track_id: str, candidate_id: str, automatic: bool = False) -> None:
+    existing = source_download_tasks.get(track_id)
+    if existing and not existing.done():
+        return
+    track = database().track(job_id, track_id)
+    if not track:
+        return
+    candidate = next((item for item in _track_candidates(track) if item.get("id") == candidate_id), None)
+    if not candidate:
+        return
+    database().set_track(track_id, status="downloading", progress=0, error=None)
+    source_download_tasks[track_id] = asyncio.create_task(
+        download_source_candidate(job_id, track_id, candidate, automatic)
+    )
+
+
+async def download_source_candidate(job_id: str, track_id: str, candidate: dict, automatic: bool) -> None:
+    reserved = 0
+    destination = None
+    try:
+        track = database().track(job_id, track_id)
+        if not track or track["status"] != "downloading":
+            return
+        extension = str(candidate.get("extension") or "").lower()
+        expected_size = int(candidate.get("size") or 0)
+        if extension not in ALLOWED_INPUT_EXTENSIONS or expected_size <= 0 or expected_size > settings.max_upload_bytes:
+            raise ArchiveSourceError("The selected licensed audio file exceeds the configured limits.")
+        job_root = settings.data_dir / "jobs" / job_id
+        input_dir = job_root / "input"
+        input_dir.mkdir(parents=True, exist_ok=True)
+        previous_path = Path(track["input_path"]) if track.get("input_path") else None
+        old_size = previous_path.stat().st_size if previous_path and previous_path.is_file() else 0
+        if storage_lock is None or source_slots is None:
+            raise ArchiveSourceError("The audio source queue is not ready.")
+        async with storage_lock:
+            job_used = max(0, stored_bytes(job_root) - old_size)
+            global_used = max(0, stored_bytes(settings.data_dir) - old_size)
+            free = shutil.disk_usage(settings.data_dir).free
+            if (job_used + storage_reservations[job_id] + expected_size > settings.max_uploads_per_job_bytes
+                    or global_used + storage_reservations["__global__"] + expected_size > settings.max_total_storage_bytes
+                    or expected_size > free - storage_reservations["__global__"]):
+                raise AudioError("There is not enough temporary storage for this licensed source.")
+            storage_reservations[job_id] += expected_size
+            storage_reservations["__global__"] += expected_size
+            reserved = expected_size
+        destination = input_dir / f"{track_id}.source{extension}"
+
+        async def on_progress(value: float) -> None:
+            current = database().track(job_id, track_id)
+            if current and current["status"] == "downloading":
+                database().set_track(track_id, progress=value)
+
+        async with source_slots:
+            actual_size = await archive_source.download(
+                candidate, destination, settings.max_upload_bytes, on_progress
+            )
+        current = database().track(job_id, track_id)
+        if not current or current["status"] != "downloading":
+            destination.unlink(missing_ok=True)
+            return
+        source_info = await probe_audio(destination)
+        expected_duration = (track.get("duration_ms") or 0) / 1000
+        if automatic and expected_duration and candidate.get("duration_seconds"):
+            delta = abs(source_info["duration"] - expected_duration)
+            if delta > max(2.5, expected_duration * 0.025):
+                raise AudioError("The downloaded recording duration did not verify. Choose another match.")
+        job_bytes = stored_bytes(job_root) - old_size
+        global_bytes = stored_bytes(settings.data_dir) - old_size
+        if (actual_size > settings.max_upload_bytes
+                or job_bytes + storage_reservations[job_id] - reserved + actual_size > settings.max_uploads_per_job_bytes
+                or global_bytes + storage_reservations["__global__"] - reserved + actual_size > settings.max_total_storage_bytes):
+            raise AudioError("The downloaded source exceeded the available storage quota.")
+        if previous_path and previous_path.is_file() and previous_path != destination:
+            previous_path.unlink(missing_ok=True)
+        database().set_track(
+            track_id, status="queued", progress=0, input_path=str(destination), error=None,
+            source_name=candidate.get("source_name"), source_url=candidate.get("record_url"),
+            source_license=candidate.get("license_name"), source_license_url=candidate.get("license_url"),
+            source_attribution=candidate.get("attribution"), source_confidence=candidate.get("score"),
+            source_auto=int(automatic),
+        )
+        start_track(job_id, track_id)
+    except asyncio.CancelledError:
+        if destination:
+            destination.unlink(missing_ok=True)
+        raise
+    except Exception as exc:
+        if destination:
+            destination.unlink(missing_ok=True)
+        logger.info("authorized source download failed job=%s track=%s reason=%s", job_id, track_id, type(exc).__name__)
+        current = database().track(job_id, track_id)
+        if current and current["status"] == "downloading":
+            next_status = "needs_review" if _track_candidates(current) else "awaiting_upload"
+            message = str(exc) if isinstance(exc, (ArchiveSourceError, AudioError)) else "The selected licensed audio could not be fetched."
+            database().set_track(track_id, status=next_status, progress=0, error=message)
+    finally:
+        if reserved:
+            storage_reservations[job_id] = max(0, storage_reservations[job_id] - reserved)
+            storage_reservations["__global__"] = max(0, storage_reservations["__global__"] - reserved)
+        task = asyncio.current_task()
+        if source_download_tasks.get(track_id) is task:
+            source_download_tasks.pop(track_id, None)
+        await refresh_job(job_id)
+
+
 def resolve_output(job_id: str, track_id: str, rows: list[dict] | None = None) -> Path | None:
     rows = rows if rows is not None else database().tracks(job_id)
     row = next((t for t in rows if t["id"] == track_id), None)
@@ -277,6 +472,7 @@ def build_archive(job_id: str, job: dict, tracks: list[dict], cover: tuple[bytes
         "created_at": job["created_at"], "tracks": [],
     }
     playlist_lines = ["#EXTM3U"]
+    source_credits = []
     with zipfile.ZipFile(temp_path, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as archive:
         for row in tracks:
             item = {
@@ -286,6 +482,12 @@ def build_archive(job_id: str, job: dict, tracks: list[dict], cover: tuple[bytes
                 "status": row["status"], "error": row["error"],
                 "source_bitrate": row["source_bitrate"],
                 "lossless_from_source": bool(row["lossless_from_source"]) if row["lossless_from_source"] is not None else None,
+                "source": ({
+                    "name": row.get("source_name"), "url": row.get("source_url"),
+                    "license": row.get("source_license"), "license_url": row.get("source_license_url"),
+                    "attribution": row.get("source_attribution"), "match_score": row.get("source_confidence"),
+                    "auto_matched": bool(row.get("source_auto")),
+                } if row.get("source_name") else None),
                 "filename": None,
             }
             path = resolve_output(job_id, row["id"], tracks)
@@ -297,7 +499,19 @@ def build_archive(job_id: str, job: dict, tracks: list[dict], cover: tuple[bytes
                 playlist_lines.append(filename)
                 item["filename"] = filename
                 item["status"] = "completed" if row["status"] == "duplicate" else row["status"]
+            if item["source"]:
+                source_credits.append(
+                    f"{item['position']:02d}. {item['source'].get('attribution') or item['artist']} — "
+                    f"{item['source'].get('url') or ''} — {item['source'].get('license') or ''} "
+                    f"{item['source'].get('license_url') or ''}"
+                )
             manifest["tracks"].append(item)
+        if source_credits:
+            archive.writestr(
+                f"{folder_name}/SOURCES.txt",
+                "Source credits and license declarations (as listed by the provider). Check attribution and share-alike terms before reuse:\n\n" +
+                "\n".join(source_credits) + "\n",
+            )
         if cover:
             archive.writestr(f"{folder_name}/cover{cover[1]}", cover[0])
         archive.writestr(f"{folder_name}/playlist.m3u8", "\n".join(playlist_lines) + "\n")
@@ -319,16 +533,25 @@ async def cleanup_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    global store, encoder_slots, storage_lock
+    global store, encoder_slots, source_slots, storage_lock
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     (settings.data_dir / "jobs").mkdir(parents=True, exist_ok=True)
     store = Store(settings.data_dir / "jobs.sqlite3")
     encoder_slots = asyncio.Semaphore(settings.max_encoders)
+    source_slots = asyncio.Semaphore(settings.archive_search_concurrency)
     storage_lock = asyncio.Lock()
     if spotify.http.is_closed:
         spotify.http = httpx.AsyncClient(timeout=20, follow_redirects=False)
+    await archive_source.open()
+    for partial in (settings.data_dir / "jobs").rglob("*.downloading"):
+        partial.unlink(missing_ok=True)
+    for partial in (settings.data_dir / "jobs").rglob("*.uploading"):
+        partial.unlink(missing_ok=True)
     for row in store.recoverable():
-        if row["status"] == "uploading":
+        if row["status"] in {"searching", "downloading"}:
+            store.set_track(row["id"], status="searching", progress=0, error=None)
+            start_source_search(row["job_id"], row["id"])
+        elif row["status"] == "uploading":
             if row.get("input_path") and Path(row["input_path"]).is_file():
                 store.set_track(row["id"], status="queued", progress=0)
                 start_track(row["job_id"], row["id"])
@@ -339,8 +562,6 @@ async def lifespan(_: FastAPI):
             start_track(row["job_id"], row["id"])
         else:
             store.set_track(row["id"], status="failed", progress=0, error="Uploaded audio is missing.")
-    for partial in (settings.data_dir / "jobs").rglob("*.uploading"):
-        partial.unlink(missing_ok=True)
     storage_reservations.clear()
     now = time.time()
     for old in store.old_jobs(now - settings.retention_days * 86400):
@@ -352,14 +573,16 @@ async def lifespan(_: FastAPI):
     finally:
         cleaner.cancel()
         await asyncio.gather(cleaner, return_exceptions=True)
-        for task in list(track_tasks.values()):
+        tasks = [*track_tasks.values(), *source_search_tasks.values(), *source_download_tasks.values()]
+        for task in tasks:
             task.cancel()
-        if track_tasks:
-            await asyncio.gather(*track_tasks.values(), return_exceptions=True)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
         if store:
             store.close()
         store = None
         await spotify.close()
+        await archive_source.close()
 
 
 app = FastAPI(title="Spotify Playlist Audio", version="1.0.0", lifespan=lifespan)
@@ -461,6 +684,20 @@ async def create_job(body: CreateJobRequest, request: Request):
     source_tracks = [t for t in result["tracks"] if t["index"] in selected]
     if len(source_tracks) != len(selected) or len(source_tracks) > settings.max_tracks:
         raise HTTPException(422, "The selection contains an invalid track.")
+    pending_tracks = 0
+    pending_spotify_ids = set()
+    for track in source_tracks:
+        spotify_id = track.get("spotify_id")
+        if spotify_id and spotify_id in pending_spotify_ids:
+            continue
+        if spotify_id:
+            pending_spotify_ids.add(spotify_id)
+        pending_tracks += 1
+    active_source_tasks = sum(not task.done() for task in source_search_tasks.values()) + sum(
+        not task.done() for task in source_download_tasks.values()
+    )
+    if active_source_tasks + pending_tracks > settings.max_pending_source_tasks:
+        raise HTTPException(503, "The source search queue is busy. Try this job again shortly.")
     job_id = uuid.uuid4().hex
     job_token = secrets.token_urlsafe(32)
     rows = []
@@ -473,7 +710,7 @@ async def create_job(body: CreateJobRequest, request: Request):
             seen[spotify_id] = track_id
         rows.append({
             **track, "id": track_id, "position": track["position"],
-            "status": "duplicate" if duplicate_of else "awaiting_upload",
+            "status": "duplicate" if duplicate_of else "searching",
             "duplicate_of": duplicate_of,
         })
     job = {
@@ -483,6 +720,9 @@ async def create_job(body: CreateJobRequest, request: Request):
     }
     database().create_job(job, job_token, rows)
     (settings.data_dir / "jobs" / job_id / "input").mkdir(parents=True, exist_ok=True)
+    for row in rows:
+        if row["status"] == "searching":
+            start_source_search(job_id, row["id"])
     return {"token": job_token, "job": job_view(database().job(job_id), job_token)}
 
 
@@ -501,7 +741,7 @@ async def upload_audio(
     track = database().track(job_id, track_id)
     if not track:
         raise HTTPException(404, "Track not found.")
-    if track["status"] not in {"awaiting_upload", "failed"}:
+    if track["status"] not in {"awaiting_upload", "needs_review", "failed"}:
         raise HTTPException(409, "This track cannot accept another upload in its current state.")
     previous_status = track["status"]
     previous_path = track.get("input_path")
@@ -568,10 +808,68 @@ async def upload_audio(
         await file.close()
     if previous_path and Path(previous_path) != destination:
         Path(previous_path).unlink(missing_ok=True)
-    database().set_track(track_id, input_path=str(destination), status="queued", progress=0, error=None)
+    database().set_track(
+        track_id, input_path=str(destination), status="queued", progress=0, error=None,
+        source_candidates="[]", source_name=None, source_url=None, source_license=None,
+        source_license_url=None, source_attribution=None, source_confidence=None, source_auto=None,
+    )
     database().set_job_status(job_id, "processing")
     start_track(job_id, track_id)
     return {"accepted": True, "track_id": track_id, "job": job_view(job, x_job_token)}
+
+
+@app.post("/api/jobs/{job_id}/tracks/{track_id}/sources/search")
+async def search_track_sources(
+    job_id: str, track_id: str, request: Request,
+    x_job_token: str | None = Header(default=None),
+):
+    require_job(job_id, x_job_token)
+    throttle(request, "source-search", 30)
+    track = database().track(job_id, track_id)
+    if not track:
+        raise HTTPException(404, "Track not found.")
+    if track["status"] not in {"awaiting_upload", "needs_review", "failed"}:
+        raise HTTPException(409, "This track cannot be searched in its current state.")
+    active_source_tasks = sum(not task.done() for task in source_search_tasks.values()) + sum(
+        not task.done() for task in source_download_tasks.values()
+    )
+    if active_source_tasks >= settings.max_pending_source_tasks:
+        raise HTTPException(503, "The source search queue is busy. Try again shortly.")
+    database().set_track(
+        track_id, status="searching", progress=0, error=None, source_candidates="[]"
+    )
+    start_source_search(job_id, track_id)
+    return job_view(database().job(job_id), x_job_token)
+
+
+class SelectSourceRequest(BaseModel):
+    candidate_id: str = Field(min_length=32, max_length=32, pattern=r"^[a-f0-9]{32}$")
+
+
+@app.post("/api/jobs/{job_id}/tracks/{track_id}/source")
+async def select_track_source(
+    job_id: str, track_id: str, body: SelectSourceRequest,
+    x_job_token: str | None = Header(default=None),
+):
+    require_job(job_id, x_job_token)
+    track = database().track(job_id, track_id)
+    if not track:
+        raise HTTPException(404, "Track not found.")
+    if track["status"] not in {"awaiting_upload", "needs_review", "failed"}:
+        raise HTTPException(409, "This track cannot accept a source selection in its current state.")
+    active_source_tasks = sum(not task.done() for task in source_search_tasks.values()) + sum(
+        not task.done() for task in source_download_tasks.values()
+    )
+    if active_source_tasks >= settings.max_pending_source_tasks:
+        raise HTTPException(503, "The source download queue is busy. Try again shortly.")
+    candidate = next(
+        (item for item in _track_candidates(track) if item.get("id") == body.candidate_id),
+        None,
+    )
+    if not candidate:
+        raise HTTPException(404, "That source candidate is no longer available. Search again.")
+    start_candidate_download(job_id, track_id, body.candidate_id, automatic=False)
+    return job_view(database().job(job_id), x_job_token)
 
 
 @app.post("/api/jobs/{job_id}/retry")
@@ -580,6 +878,10 @@ async def retry_failed(job_id: str, x_job_token: str | None = Header(default=Non
     rows = database().retry_failed(job_id)
     for track in rows:
         start_track(job_id, track["id"])
+    for track in database().tracks(job_id):
+        if track["status"] == "failed" and not track.get("input_path"):
+            database().set_track(track["id"], status="searching", progress=0, error=None)
+            start_source_search(job_id, track["id"])
     await refresh_job(job_id)
     return job_view(database().job(job_id), x_job_token)
 
@@ -590,11 +892,12 @@ async def cancel_track(job_id: str, track_id: str, x_job_token: str | None = Hea
     track = database().track(job_id, track_id)
     if not track:
         raise HTTPException(404, "Track not found.")
-    task = track_tasks.get(track_id)
-    if track["status"] in {"queued", "awaiting_upload", "processing", "uploading"}:
+    if track["status"] in {"queued", "awaiting_upload", "processing", "uploading", "searching", "downloading", "needs_review"}:
         database().set_track(track_id, status="cancelled", progress=0)
-        if task and not task.done():
-            task.cancel()
+        for tasks in (track_tasks, source_search_tasks, source_download_tasks):
+            task = tasks.get(track_id)
+            if task and not task.done():
+                task.cancel()
     await refresh_job(job_id)
     return job_view(database().job(job_id), x_job_token)
 
@@ -603,11 +906,12 @@ async def cancel_track(job_id: str, track_id: str, x_job_token: str | None = Hea
 async def cancel_job(job_id: str, x_job_token: str | None = Header(default=None)):
     require_job(job_id, x_job_token)
     for track in database().tracks(job_id):
-        task = track_tasks.get(track["id"])
-        if track["status"] in {"queued", "awaiting_upload", "processing", "uploading"}:
+        if track["status"] in {"queued", "awaiting_upload", "processing", "uploading", "searching", "downloading", "needs_review"}:
             database().set_track(track["id"], status="cancelled", progress=0)
-            if task and not task.done():
-                task.cancel()
+            for tasks in (track_tasks, source_search_tasks, source_download_tasks):
+                task = tasks.get(track["id"])
+                if task and not task.done():
+                    task.cancel()
     await refresh_job(job_id)
     return job_view(database().job(job_id), x_job_token)
 

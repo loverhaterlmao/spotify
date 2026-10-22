@@ -11,6 +11,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.audio import AudioError, convert_audio, output_options, probe_audio, safe_filename
+from backend.archive_source import ArchiveSourceError, InternetArchiveSource, supported_license
+from backend.matching import rank_candidates, score_candidate
 from backend.spotify import API_ROOT, SpotifyClient, SpotifyError, normalize_track, parse_spotify_url
 from backend.sources import SuppliedAudio, UserUploadSource
 from backend.store import Store
@@ -102,8 +104,12 @@ def test_archive_is_ordered_and_contains_manifest(tmp_path, monkeypatch):
          "lossless_from_source": None, "error": None},
     ]
     local_store.create_job(job, "secret", tracks)
-    local_store.set_track("first", output_path=str(source), status="completed", source_bitrate=192000,
-                          lossless_from_source=0)
+    local_store.set_track(
+        "first", output_path=str(source), status="completed", source_bitrate=192000,
+        lossless_from_source=0, source_name="internet-archive", source_url="https://archive.org/details/item",
+        source_license="CC BY 4.0", source_license_url="https://creativecommons.org/licenses/by/4.0/",
+        source_attribution="Artist", source_confidence=0.97, source_auto=1,
+    )
     archive = main.build_archive(job_id, job, local_store.tracks(job_id))
     with zipfile.ZipFile(archive) as zf:
         names = zf.namelist()
@@ -111,6 +117,8 @@ def test_archive_is_ordered_and_contains_manifest(tmp_path, monkeypatch):
         assert names[1].endswith("02 - Artist - First.mp3")
         manifest = json.loads(zf.read(next(name for name in names if name.endswith("manifest.json"))))
         assert len(manifest["tracks"]) == 2
+        assert manifest["tracks"][0]["source"]["license"] == "CC BY 4.0"
+        assert any(name.endswith("SOURCES.txt") for name in names)
         playlist = zf.read(next(name for name in names if name.endswith("playlist.m3u8"))).decode()
         assert "#EXTM3U" in playlist and "02 - Artist - First.mp3" in playlist
     local_store.close()
@@ -195,3 +203,157 @@ def test_synthetic_wav_is_encoded_and_verified(tmp_path):
     assert 0.9 <= inspected["duration"] <= 1.2
     assert result["lossless_from_source"] is False
     assert progress[-1] == 100
+
+
+def test_license_allowlist_rejects_unlicensed_and_restrictive_records():
+    assert supported_license("https://creativecommons.org/licenses/by/4.0/")[0] == "CC BY 4.0"
+    assert supported_license("http://creativecommons.org/publicdomain/zero/1.0/")[0] == "CC0 1.0"
+    assert supported_license("https://creativecommons.org/licenses/by-nc/4.0/") is None
+    assert supported_license("https://example.org/license") is None
+
+
+def test_matching_requires_strong_metadata_and_blocks_version_substitution():
+    track = {
+        "title": "Sample Song", "artist": "The Example", "album": "One Record",
+        "duration_ms": 180000, "isrc": "USABC1234567",
+    }
+    exact = {
+        "title": "Sample Song", "artist": "The Example", "album": "One Record",
+        "duration_seconds": 180.2, "isrc": "USABC1234567", "size": 1000,
+    }
+    result = score_candidate(track, exact)
+    assert result["auto_match"] is True
+    assert result["match_score"] >= 94
+    remix = score_candidate(track, {**exact, "title": "Sample Song Remix"})
+    assert remix["auto_match"] is False
+    mismatch = score_candidate(track, {**exact, "isrc": "USXYZ9999999"})
+    assert mismatch["auto_match"] is False
+
+
+def test_internet_archive_search_filters_licenses_and_returns_audio_candidates():
+    calls = []
+
+    def handler(request):
+        calls.append(request.url)
+        if request.url.path == "/advancedsearch.php":
+            return httpx.Response(200, json={"response": {"docs": [
+                {"identifier": "licensed-item"}, {"identifier": "unlicensed-item"}
+            ]}})
+        identifier = request.url.path.rsplit("/", 1)[-1]
+        metadata = {
+            "licensed-item": {
+                "title": "Sample Song", "artist": "The Example", "album": "One Record",
+                "isrc": "USABC1234567", "licenseurl": "http://creativecommons.org/licenses/by/4.0/",
+            },
+            "unlicensed-item": {
+                "title": "Sample Song", "artist": "The Example", "licenseurl": "https://creativecommons.org/licenses/by-nc/4.0/",
+            },
+        }[identifier]
+        return httpx.Response(200, json={
+            "metadata": metadata,
+            "files": [{"name": "Sample Song.mp3", "size": "1000", "length": "180.2", "format": "MP3"}],
+        })
+
+    async def exercise():
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler), follow_redirects=False)
+        source = InternetArchiveSource(client)
+        try:
+            candidates = await source.search({
+                "title": "Sample Song", "artist": "The Example", "album": "One Record",
+                "duration_ms": 180000, "isrc": "USABC1234567",
+            }, max_file_bytes=2000)
+            ranked = rank_candidates({
+                "title": "Sample Song", "artist": "The Example", "album": "One Record",
+                "duration_ms": 180000, "isrc": "USABC1234567",
+            }, candidates)
+            assert len(candidates) == 1
+            assert candidates[0]["license_name"] == "CC BY 4.0"
+            assert ranked[0]["auto_match"] is True
+            assert all(url.host == "archive.org" for url in calls)
+        finally:
+            await client.aclose()
+
+    asyncio.run(exercise())
+
+
+def test_internet_archive_download_blocks_redirect_outside_allowlist(tmp_path):
+    metadata = {
+        "title": "Sample Song", "artist": "The Example",
+        "licenseurl": "https://creativecommons.org/licenses/by/4.0/",
+    }
+
+    def handler(request):
+        if request.url.path.startswith("/metadata/"):
+            return httpx.Response(200, json={
+                "metadata": metadata,
+                "files": [{"name": "song.mp3", "size": "4", "format": "MP3"}],
+            })
+        return httpx.Response(302, headers={"Location": "https://evil.example/audio.mp3"})
+
+    async def exercise():
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler), follow_redirects=False)
+        source = InternetArchiveSource(client)
+        candidate = {
+            "identifier": "licensed-item", "file_name": "song.mp3",
+            "license_url": "https://creativecommons.org/licenses/by/4.0/",
+        }
+        async def on_progress(_value):
+            return None
+        try:
+            with pytest.raises(ArchiveSourceError, match="redirect was blocked"):
+                await source.download(candidate, tmp_path / "song.mp3", 100, on_progress)
+            assert not (tmp_path / "song.mp3").exists()
+        finally:
+            await client.aclose()
+
+    asyncio.run(exercise())
+
+
+def test_job_creation_starts_authorized_source_search(tmp_path, monkeypatch):
+    from backend import main
+    import time
+    monkeypatch.setattr(main.settings, "data_dir", tmp_path / "api-data")
+    started = []
+    monkeypatch.setattr(main, "start_source_search", lambda job_id, track_id: started.append((job_id, track_id)))
+    analysis_id = "a" * 40
+    main.analyses[analysis_id] = (time.time(), {
+        "name": "Example playlist", "artwork": None, "kind": "playlist",
+        "tracks": [{
+            "index": 1, "position": 1, "spotify_id": "0123456789012345678901",
+            "title": "Sample Song", "artist": "The Example", "album": "One Record",
+            "duration_ms": 180000, "track_number": 1, "disc_number": 1, "isrc": "USABC1234567",
+        }],
+    })
+    with TestClient(main.app) as client:
+        response = client.post("/api/jobs", json={
+            "analysis_id": analysis_id, "selected_indices": [1], "format": "mp3", "bitrate": "192",
+        })
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["job"]["tracks"][0]["status"] == "searching"
+        job_id = payload["job"]["id"]
+        track_id = payload["job"]["tracks"][0]["id"]
+        assert started == [(job_id, track_id)]
+        candidate = {
+            "id": "b" * 32, "title": "Sample Song", "artist": "The Example",
+            "match_score": 98, "license_name": "CC BY 4.0",
+            "record_url": "https://archive.org/details/licensed-item",
+            "license_url": "https://creativecommons.org/licenses/by/4.0/",
+        }
+        main.store.set_track(
+            track_id, status="needs_review",
+            source_candidates=json.dumps([candidate]),
+        )
+        selected = []
+        monkeypatch.setattr(
+            main, "start_candidate_download",
+            lambda selected_job, selected_track, candidate_id, automatic=False:
+                selected.append((selected_job, selected_track, candidate_id, automatic)),
+        )
+        response = client.post(
+            f"/api/jobs/{job_id}/tracks/{track_id}/source",
+            headers={"X-Job-Token": payload["token"]},
+            json={"candidate_id": "b" * 32},
+        )
+        assert response.status_code == 200
+        assert selected == [(job_id, track_id, "b" * 32, False)]

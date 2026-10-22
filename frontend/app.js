@@ -7,6 +7,7 @@ let analysis = null;
 let activeJob = null;
 let pollTimer = null;
 const uploads = new Map();
+const expandedSources = new Set();
 
 function esc(value) {
   return String(value ?? "").replace(/[&<>"']/g, (c) => ({
@@ -107,7 +108,7 @@ $("#start-job").addEventListener("click", async () => {
   const selected_indices = [...document.querySelectorAll(".track-check:checked")].map((item) => Number(item.value));
   const button = $("#start-job");
   button.disabled = true;
-  button.textContent = "Preparing job…";
+  button.textContent = "Searching authorized sources…";
   try {
     const response = await fetch("/api/jobs", {
       method: "POST", headers: {"Content-Type": "application/json"},
@@ -129,7 +130,7 @@ $("#start-job").addEventListener("click", async () => {
   } catch (error) {
     setMessage(error.message, true);
     button.disabled = false;
-    button.innerHTML = 'Prepare selected audio <span aria-hidden="true">→</span>';
+    button.innerHTML = 'Find matches &amp; prepare <span aria-hidden="true">→</span>';
   }
 });
 function apiHeaders() {
@@ -146,10 +147,18 @@ function renderJob(job) {
     job.status === "partial" ? "Finished with some tracks needing attention" :
     job.status === "failed" ? "No tracks finished successfully" :
     job.status === "cancelled" ? "Job cancelled" :
+    counts.searching ? "Searching licensed audio sources" :
+    counts.downloading ? "Fetching a matched audio file" :
     counts.processing ? "Converting audio" :
-    counts.queued ? "Waiting for an encoder" : "Add audio to start processing";
-  $("#progress-detail").textContent = counts.completed + " ready · " + counts.failed + " failed · " + counts.awaiting_upload + " waiting for audio";
-  $("#active-detail").textContent = counts.processing ? counts.processing + " encoding" : "";
+    counts.queued ? "Waiting for an encoder" :
+    counts.needs_review ? "Review the suggested matches" : "No licensed match found";
+  $("#progress-detail").textContent = counts.completed + " ready · " + counts.needs_review + " to review · " +
+    counts.awaiting_upload + " without a match · " + counts.failed + " failed";
+  $("#active-detail").textContent = [
+    counts.searching ? counts.searching + " searching" : "",
+    counts.downloading ? counts.downloading + " downloading" : "",
+    counts.processing ? counts.processing + " encoding" : ""
+  ].filter(Boolean).join(" · ");
   const actions = [];
   if (job.zip_url) actions.push('<a class="button button-primary" href="' + esc(job.zip_url) + '">Download playlist ZIP <span aria-hidden="true">↓</span></a>');
   if (counts.failed) actions.push('<button class="button button-quiet" id="retry-button" type="button">Retry failed tracks</button>');
@@ -159,8 +168,12 @@ function renderJob(job) {
   $("#cancel-job").textContent = job.active ? "Cancel job" : "Job finished";
   $("#job-tracks").innerHTML = job.tracks.map((track) => {
     const uploading = uploads.get(track.id);
+    const candidates = Array.isArray(track.source_candidates) ? track.source_candidates : [];
     const state = uploading ? "Uploading " + uploading + "%" :
-      track.status === "awaiting_upload" ? "Add audio file" :
+      track.status === "searching" ? "Searching licensed sources…" :
+      track.status === "downloading" ? "Downloading " + Math.round(track.progress) + "%" :
+      track.status === "needs_review" ? "Choose a match" :
+      track.status === "awaiting_upload" ? "No licensed match" :
       track.status === "uploading" ? "Upload continuing on server" :
       track.status === "processing" ? "Converting " + Math.round(track.progress) + "%" :
       track.status === "queued" ? "Queued" :
@@ -168,20 +181,51 @@ function renderJob(job) {
         track.source_bitrate ? "Ready · source " + Math.round(track.source_bitrate / 1000) + " kbps" : "Ready") :
       track.status === "duplicate" ? "Duplicate track" :
       track.status === "failed" ? "Needs attention" : track.status;
-    const canUpload = track.status === "awaiting_upload" || track.status === "failed";
+    const canUpload = ["awaiting_upload", "needs_review", "failed"].includes(track.status);
     const uploadControl = canUpload ?
       '<label class="button button-quiet upload-control" for="file-' + track.id + '">Add audio<input id="file-' + track.id + '" class="audio-file" type="file" accept="audio/*,.flac,.opus,.ogg" data-id="' + track.id + '" hidden></label>' : "";
-    const cancelControl = ["queued", "processing", "awaiting_upload"].includes(track.status) ?
+    const canSearch = ["awaiting_upload", "needs_review", "failed"].includes(track.status);
+    const searchControl = canSearch ?
+      '<button class="button button-quiet upload-control source-search" data-id="' + track.id + '" type="button">' +
+      (candidates.length ? "Search again" : "Find match") + '</button>' : "";
+    const sourceButton = (candidate) =>
+      '<div class="source-candidate"><div class="source-candidate-copy"><strong>' + esc(candidate.title) +
+      '</strong><span>' + esc(candidate.artist) + ' · ' + esc(candidate.match_score) + '% match · ' +
+      esc(candidate.license_name) + '</span><span>' + esc((candidate.match_reasons || []).join(" · ")) +
+      '</span><a href="' + esc(candidate.record_url) + '" target="_blank" rel="noopener noreferrer">Source details</a> · ' +
+      '<a href="' + esc(candidate.license_url) + '" target="_blank" rel="noopener noreferrer">License</a></div>' +
+      '<button class="button button-primary button-small source-select" data-track-id="' + track.id +
+      '" data-candidate-id="' + esc(candidate.id) + '" type="button">Use match</button></div>';
+    const sourcePanel = track.status === "needs_review" && expandedSources.has(track.id) ?
+      '<div class="source-candidate-list">' + candidates.map(sourceButton).join("") + '</div>' : "";
+    const reviewButton = track.status === "needs_review" ?
+      '<button class="button button-quiet upload-control source-review" data-id="' + track.id +
+      '" type="button">' + (expandedSources.has(track.id) ? "Hide matches" : "Review " + candidates.length + " matches") + '</button>' : "";
+    const currentSource = track.source ?
+      '<span class="source-credit">Source: <a href="' + esc(track.source.url) + '" target="_blank" rel="noopener noreferrer">' +
+      esc(track.source.name) + '</a> · ' + esc(track.source.license) + (track.source.auto_matched ? ' · automatic match' : ' · selected by you') +
+      '</span>' : "";
+    const cancelControl = ["queued", "processing", "awaiting_upload", "searching", "downloading", "needs_review", "uploading"].includes(track.status) ?
       '<button class="icon-button cancel-track" data-id="' + track.id + '" type="button" aria-label="Cancel ' + esc(track.title) + '">×</button>' : "";
     const download = track.download_url ? '<a class="icon-button download-track" href="' + esc(track.download_url) + '" aria-label="Download ' + esc(track.title) + '">↓</a>' : "";
     return '<div class="job-track">' + artwork(null, track.title) +
       '<span class="track-copy"><strong>' + String(track.position).padStart(2, "0") + ' · ' + esc(track.title) +
       '</strong><span>' + esc(track.artist) + '</span>' +
       (track.error ? '<span class="track-error">' + esc(track.error) + '</span>' : "") +
-      '</span><span class="track-state">' + esc(state) + '</span>' + uploadControl + download + cancelControl + '</div>';
+      currentSource + '</span><span class="track-state">' + esc(state) + '</span>' +
+      reviewButton + searchControl + uploadControl + download + cancelControl + sourcePanel + '</div>';
   }).join("");
   $("#job-tracks").querySelectorAll(".audio-file").forEach((input) => input.addEventListener("change", uploadTrack));
   $("#job-tracks").querySelectorAll(".cancel-track").forEach((button) => button.addEventListener("click", () => cancelTrack(button.dataset.id)));
+  $("#job-tracks").querySelectorAll(".source-search").forEach((button) => button.addEventListener("click", () => searchSources(button.dataset.id)));
+  $("#job-tracks").querySelectorAll(".source-review").forEach((button) => button.addEventListener("click", () => {
+    if (expandedSources.has(button.dataset.id)) expandedSources.delete(button.dataset.id);
+    else expandedSources.add(button.dataset.id);
+    refreshJob();
+  }));
+  $("#job-tracks").querySelectorAll(".source-select").forEach((button) => button.addEventListener("click", () => {
+    selectSource(button.dataset.trackId, button.dataset.candidateId);
+  }));
   if (!job.active && pollTimer) { clearInterval(pollTimer); pollTimer = null; }
 }
 async function refreshJob() {
@@ -195,6 +239,35 @@ async function refreshJob() {
   } catch (error) {
     if (pollTimer) clearInterval(pollTimer);
     $("#job-subtitle").textContent = error.message;
+  }
+}
+async function searchSources(trackId) {
+  if (!activeJob) return;
+  try {
+    const response = await fetch("/api/jobs/" + encodeURIComponent(activeJob.id) + "/tracks/" +
+      encodeURIComponent(trackId) + "/sources/search", {method: "POST", headers: apiHeaders()});
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.detail || "Source search could not start.");
+    renderJob(payload);
+    if (!pollTimer) pollTimer = setInterval(refreshJob, 1800);
+  } catch (error) {
+    alert(error.message || "Source search could not start.");
+  }
+}
+async function selectSource(trackId, candidateId) {
+  if (!activeJob) return;
+  try {
+    const response = await fetch("/api/jobs/" + encodeURIComponent(activeJob.id) + "/tracks/" +
+      encodeURIComponent(trackId) + "/source", {
+        method: "POST", headers: {...apiHeaders(), "Content-Type": "application/json"},
+        body: JSON.stringify({candidate_id: candidateId})
+      });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.detail || "That source could not be selected.");
+    renderJob(payload);
+    if (!pollTimer) pollTimer = setInterval(refreshJob, 1800);
+  } catch (error) {
+    alert(error.message || "That source could not be selected.");
   }
 }
 function uploadTrack(event) {
@@ -251,6 +324,8 @@ $("#new-job").addEventListener("click", () => {
   jobSection.hidden = true;
   previewSection.hidden = true;
   form.reset();
+  $("#start-job").innerHTML = 'Find matches &amp; prepare <span aria-hidden="true">→</span>';
+  $("#start-job").disabled = true;
   setMessage("");
   window.scrollTo({top: 0, behavior: "smooth"});
 });

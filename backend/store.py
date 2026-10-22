@@ -28,7 +28,10 @@ class Store:
                     artist TEXT NOT NULL, album TEXT NOT NULL, duration_ms INTEGER, track_number INTEGER, disc_number INTEGER,
                     isrc TEXT, status TEXT NOT NULL, progress REAL NOT NULL DEFAULT 0,
                     input_path TEXT, output_path TEXT, source_bitrate INTEGER,
-                    lossless_from_source INTEGER, error TEXT, duplicate_of TEXT
+                    lossless_from_source INTEGER, error TEXT, duplicate_of TEXT,
+                    source_candidates TEXT NOT NULL DEFAULT '[]', source_name TEXT, source_url TEXT,
+                    source_license TEXT, source_license_url TEXT, source_attribution TEXT,
+                    source_confidence REAL, source_auto INTEGER
                 );
                 CREATE INDEX IF NOT EXISTS tracks_job_position ON tracks(job_id, position);
             """)
@@ -37,6 +40,15 @@ class Store:
                 self.db.execute("ALTER TABLE tracks ADD COLUMN track_number INTEGER")
             if "disc_number" not in columns:
                 self.db.execute("ALTER TABLE tracks ADD COLUMN disc_number INTEGER")
+            source_columns = {
+                "source_candidates": "TEXT NOT NULL DEFAULT '[]'",
+                "source_name": "TEXT", "source_url": "TEXT", "source_license": "TEXT",
+                "source_license_url": "TEXT", "source_attribution": "TEXT",
+                "source_confidence": "REAL", "source_auto": "INTEGER",
+            }
+            for name, declaration in source_columns.items():
+                if name not in columns:
+                    self.db.execute(f"ALTER TABLE tracks ADD COLUMN {name} {declaration}")
             self.db.commit()
 
     @staticmethod
@@ -86,7 +98,8 @@ class Store:
 
     def set_track(self, track_id: str, **values: Any) -> None:
         allowed = {"status", "progress", "input_path", "output_path", "source_bitrate",
-                   "lossless_from_source", "error"}
+                   "lossless_from_source", "error", "source_candidates", "source_name", "source_url",
+                   "source_license", "source_license_url", "source_attribution", "source_confidence", "source_auto"}
         updates = {k: v for k, v in values.items() if k in allowed}
         if not updates:
             return
@@ -109,7 +122,7 @@ class Store:
     def recoverable(self) -> list[dict[str, Any]]:
         with self.lock:
             return [dict(r) for r in self.db.execute(
-                "SELECT * FROM tracks WHERE (status IN ('queued','processing') AND input_path IS NOT NULL) OR status='uploading'"
+                "SELECT * FROM tracks WHERE (status IN ('queued','processing') AND input_path IS NOT NULL) OR status IN ('uploading','searching','downloading')"
             ).fetchall()]
 
     def old_jobs(self, before_epoch: float) -> list[dict[str, Any]]:

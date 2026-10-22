@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Awaitable, Callable, Protocol
 
 
 @dataclass(frozen=True)
@@ -16,6 +16,24 @@ class AudioSource(Protocol):
 
     async def acquire(self, track_id: str) -> SuppliedAudio:
         """Return audio the caller has permission to use."""
+
+
+class SearchableAudioSource(Protocol):
+    """A source adapter that searches metadata and verifies download permissions."""
+
+    name: str
+
+    async def search(self, track: dict, max_file_bytes: int) -> list[dict]:
+        """Return candidates with explicit licenses and stable source identifiers."""
+
+    async def download(
+        self,
+        candidate: dict,
+        destination: Path,
+        max_bytes: int,
+        on_progress: Callable[[float], Awaitable[None]],
+    ) -> int:
+        """Download a selected, revalidated candidate to a local file."""
 
 
 class UserUploadSource:
