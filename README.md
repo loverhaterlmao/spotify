@@ -4,7 +4,8 @@ Soundloom is a mobile-first Spotify metadata and authorized-audio preparation ap
 
 ## What works
 
-- Spotify track, album, public playlist, and Spotify URI parsing, with paginated playlist metadata (up to the configured track limit), ordering, artwork previews, and duplicate detection.
+- Spotify track, album, public playlist, and Spotify URI parsing, with paginated playlist metadata (up to the configured track limit), ordering, artwork previews, and duplicate detection when Spotify API access is configured.
+- Playlist CSV import for mobile users who cannot create a Spotify developer app. Export the playlist through TuneMyMusic using Spotify sign-in, then upload the CSV; Soundloom does not store the CSV after parsing.
 - Optional Spotify OAuth for private and collaborative playlists using the documented Web API scopes playlist-read-private and playlist-read-collaborative.
 - Automatic Internet Archive search and metadata matching against explicitly licensed audio. High-confidence, unique title/artist/duration matches (or strong ISRC matches) download automatically; uncertain matches are held for review, and mismatched live, remix, acoustic, cover, or other version markers block automatic selection.
 - Per-track match review and replacement selection, retryable source searches, manual per-track audio upload, and FFmpeg checks that reject empty, undecodable, or effectively silent output before a track is downloadable. Playlist ZIP files are CRC-checked and cannot contain zero-byte audio entries.
@@ -69,10 +70,10 @@ Render's `PORT` is used by the included Dockerfile. The browser can leave while 
 ## Use on iPhone
 
 1. Open the deployed HTTPS URL in Safari.
-2. Paste an open.spotify.com track, album, or playlist link, or a Spotify URI. If the item is private, tap **Connect Spotify** and grant playlist access.
-3. Choose the output format and preview the ordered track list.
-4. Soundloom searches licensed sources automatically. Review any suggested match that needs approval and choose **Use match**, or tap **Add audio** to select a file you own or may use from Files.
-5. Leave the page if needed; the server keeps processing. Return in Safari on the same device to see saved job progress and download individual songs or the ZIP.
+2. For direct Spotify-link previews, the server needs a configured developer app. If you cannot create one, open [TuneMyMusic's Spotify-to-file exporter](https://www.tunemymusic.com/transfer/spotify-to-file), sign in to Spotify through its authorization page, choose the playlist, and export a CSV. This avoids creating developer credentials for Soundloom; TuneMyMusic's free plan allows CSV/TXT export up to 500 tracks.
+3. Return to Soundloom, tap **Import CSV**, select the exported file from Files, then choose tracks and an output format.
+4. Soundloom searches only explicitly licensed Internet Archive audio. Review a suggested match, or tap **Add audio** to select a file you own or may use from Files. Some commercial tracks will have no eligible source.
+5. Leave the page if needed; the server keeps processing. Return in Safari on the same device to see saved job progress and download individual files or the ZIP.
 6. To add the app icon, use Safari's Share button, then **Add to Home Screen**.
 
 Large exports are served as a file response from disk rather than loaded as a browser-side Blob. The job's unguessable access token is included in download URLs so Safari can download files without custom request headers; avoid sharing those URLs. Uvicorn access logging is disabled to keep tokens out of application request logs.

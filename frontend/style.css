@@ -39,6 +39,11 @@ h1 span { background: linear-gradient(94deg, #f1a1bd 5%, #c9a7ff 88%); -webkit-b
 .paste-button { border: 0; background: none; color: #c4bac6; font-size: 12px; padding: 11px; cursor: pointer; }
 .form-message { min-height: 20px; margin: 9px 0 0; color: #c6b5c6; font-size: 12px; }
 .form-message.error { color: var(--danger); }
+.csv-import { width: min(100%, 720px); margin: 9px auto 0; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 14px; border: 1px solid #ffffff0c; border-radius: 13px; background: #ffffff05; text-align: left; }
+.csv-copy { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.csv-copy strong { color: #e8dce9; font-size: 11px; }
+.csv-copy span { color: #99919d; font-size: 10px; line-height: 1.4; }
+.csv-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 7px; }
 .format-panel { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 17px; flex-wrap: wrap; }
 .setting { min-height: 42px; padding: 5px 10px; border: 1px solid var(--line); background: #ffffff08; border-radius: 11px; display: flex; gap: 12px; align-items: center; }
 .setting-label { color: #9a949b; font-size: 11px; }
@@ -110,6 +115,9 @@ footer { display: flex; justify-content: space-between; max-width: 920px; margin
   .link-icon { padding: 0 6px; }
   .paste-button { padding: 10px 7px; font-size: 11px; }
   .url-form .button { min-height: 41px; padding: 0 12px; font-size: 11px; }
+  .csv-import { flex-direction: column; align-items: stretch; gap: 9px; }
+  .csv-copy { text-align: center; }
+  .csv-actions > * { flex: 1; }
   .format-panel { gap: 7px; }
   .setting { padding: 5px 8px; gap: 8px; }
   .setting-label { font-size: 10px; }

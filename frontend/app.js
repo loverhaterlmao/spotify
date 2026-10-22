@@ -83,6 +83,25 @@ $("#paste-button").addEventListener("click", async () => {
     setMessage("Paste from your browser’s address bar or long-press the link field.");
   }
 });
+$("#csv-import-button").addEventListener("click", () => $("#playlist-csv").click());
+$("#playlist-csv").addEventListener("change", async (event) => {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  setMessage("Importing playlist CSV…");
+  try {
+    const data = new FormData();
+    data.append("file", file, file.name);
+    const response = await fetch("/api/analyze/csv", {method: "POST", body: data});
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.detail || "Could not import that playlist CSV.");
+    setMessage("");
+    renderPreview(payload);
+  } catch (error) {
+    setMessage(error.message || "Could not import that playlist CSV.", true);
+  } finally {
+    event.target.value = "";
+  }
+});
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   const button = $("#analyze-button");
@@ -324,6 +343,7 @@ $("#new-job").addEventListener("click", () => {
   jobSection.hidden = true;
   previewSection.hidden = true;
   form.reset();
+  $("#playlist-csv").value = "";
   $("#start-job").innerHTML = 'Find matches &amp; prepare <span aria-hidden="true">→</span>';
   $("#start-job").disabled = true;
   setMessage("");
