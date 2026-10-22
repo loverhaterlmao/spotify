@@ -26,7 +26,7 @@ from .spotify import SpotifyClient, SpotifyError
 from .store import Store
 from .sources import SuppliedAudio, UserUploadSource
 from .archive_source import ArchiveSourceError, InternetArchiveSource
-from .youtube_source import YouTubeSearchSource, YouTubeSourceError
+from .youtube_source import YouTubeSearchSource
 from .matching import rank_candidates
 from .playlist_import import PlaylistImportError, parse_playlist_csv
 
