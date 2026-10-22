@@ -8,6 +8,8 @@ from urllib.parse import urlencode, urlparse
 
 import httpx
 
+from .spotify_embed import fetch_public_embed
+
 
 ID_RE = re.compile(r"^[A-Za-z0-9]{22}$")
 URI_RE = re.compile(r"^spotify:(track|album|playlist):([A-Za-z0-9]{22})$")
@@ -227,6 +229,10 @@ class SpotifyClient:
         if cached and cached[0] > time.time():
             return json.loads(json.dumps(cached[1]))
         token = await self.user_token(session_id)
+        if token is None and not self.enabled:
+            result = await fetch_public_embed(self.http, kind, item_id, max_tracks)
+            self.metadata_cache[cache_key] = (time.time() + 300, result)
+            return json.loads(json.dumps(result))
         if token is None:
             token = await self._app_access_token()
         if kind == "track":

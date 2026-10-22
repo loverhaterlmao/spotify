@@ -26,6 +26,7 @@ from .spotify import SpotifyClient, SpotifyError
 from .store import Store
 from .sources import SuppliedAudio, UserUploadSource
 from .archive_source import ArchiveSourceError, InternetArchiveSource
+from .youtube_source import YouTubeSearchSource, YouTubeSourceError
 from .matching import rank_candidates
 from .playlist_import import PlaylistImportError, parse_playlist_csv
 
@@ -41,6 +42,17 @@ request_windows: dict[str, deque] = defaultdict(deque)
 store: Store | None = None
 spotify = SpotifyClient(settings.spotify_client_id, settings.spotify_client_secret, settings.spotify_redirect_uri)
 archive_source = InternetArchiveSource()
+youtube_source = YouTubeSearchSource(
+    enabled=settings.youtube_source_enabled,
+    rights_acknowledged=settings.youtube_rights_acknowledged,
+    licensed_channel_ids=settings.youtube_licensed_channel_ids,
+    license_name=settings.youtube_license_name,
+    license_url=settings.youtube_license_url,
+)
+source_adapters = {
+    archive_source.name: archive_source,
+    youtube_source.provider: youtube_source,
+}
 encoder_slots: asyncio.Semaphore | None = None
 source_slots: asyncio.Semaphore | None = None
 source_search_tasks: dict[str, asyncio.Task] = {}
@@ -305,8 +317,26 @@ async def search_source_track(job_id: str, track_id: str) -> None:
             return
         if source_slots is None:
             raise ArchiveSourceError("The licensed audio search queue is not ready.")
-        async with source_slots:
-            raw = await archive_source.search(track, settings.max_upload_bytes)
+        sources = [archive_source]
+        if youtube_source.enabled:
+            sources.append(youtube_source)
+
+        async def search_one(source):
+            async with source_slots:
+                return await source.search(track, settings.max_upload_bytes)
+
+        results = await asyncio.gather(
+            *(search_one(source) for source in sources),
+            return_exceptions=True,
+        )
+        raw = []
+        for source, result in zip(sources, results):
+            if isinstance(result, BaseException):
+                logger.info("audio source search failed provider=%s reason=%s", source.name, type(result).__name__)
+                continue
+            for candidate in result:
+                candidate.setdefault("provider", source.name)
+                raw.append(candidate)
         ranked = rank_candidates(track, raw, settings.auto_match_threshold)
         candidates = [candidate for candidate in ranked if candidate["score"] >= 0.45][:5]
         database().set_track(
@@ -403,8 +433,12 @@ async def download_source_candidate(job_id: str, track_id: str, candidate: dict,
             if current and current["status"] == "downloading":
                 database().set_track(track_id, progress=value)
 
+        provider = str(candidate.get("provider") or archive_source.name)
+        source = source_adapters.get(provider)
+        if source is None:
+            raise ArchiveSourceError("The selected source provider is not enabled.")
         async with source_slots:
-            actual_size = await archive_source.download(
+            actual_size = await source.download(
                 candidate, destination, settings.max_upload_bytes, on_progress
             )
         current = database().track(job_id, track_id)

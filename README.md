@@ -1,24 +1,24 @@
 # Soundloom
 
-Soundloom is a mobile-first Spotify metadata and authorized-audio preparation app. Spotify supplies track and playlist metadata; it does not supply downloadable audio. Soundloom never extracts Spotify audio or bypasses DRM, paywalls, or sign-in restrictions. It searches Internet Archive for files explicitly declared as CC0, CC BY, CC BY-SA, or public domain, then lets users attach their own audio when no eligible match is found.
+Soundloom is a mobile-first Spotify playlist-to-audio app. Spotify supplies metadata, while configured audio providers supply files the operator is authorized to download. Soundloom does not extract Spotify audio or bypass DRM, paywalls, or sign-in restrictions. Public Spotify embed pages support small-link previews without app credentials; CSV import handles larger playlists. Audio matching uses Internet Archive's declared Creative Commons/public-domain records and an optional, operator-configured YouTube channel allowlist covered by the operator's download rights.
 
 ## What works
 
-- Spotify track, album, public playlist, and Spotify URI parsing, with paginated playlist metadata (up to the configured track limit), ordering, artwork previews, and duplicate detection when Spotify API access is configured.
+- Spotify track, album, public playlist, and Spotify URI parsing. Public embeds provide a credential-free preview capped at 50 rows; configured Spotify Web API access supports pagination, richer metadata, and private playlists.
 - Playlist CSV import for mobile users who cannot create a Spotify developer app. Export the playlist through TuneMyMusic using Spotify sign-in, then upload the CSV; Soundloom does not store the CSV after parsing.
 - Optional Spotify OAuth for private and collaborative playlists using the documented Web API scopes playlist-read-private and playlist-read-collaborative.
-- Automatic Internet Archive search and metadata matching against explicitly licensed audio. High-confidence, unique title/artist/duration matches (or strong ISRC matches) download automatically; uncertain matches are held for review, and mismatched live, remix, acoustic, cover, or other version markers block automatic selection.
+- Automatic matching across enabled audio adapters: Internet Archive's declared license metadata and optional YouTube searches restricted to operator-licensed channel IDs. High-confidence, unique title/artist/duration matches (or strong ISRC matches) download automatically; uncertain matches are held for review, and mismatched live, remix, acoustic, cover, or other version markers block automatic selection.
 - Per-track match review and replacement selection, retryable source searches, manual per-track audio upload, and FFmpeg checks that reject empty, undecodable, or effectively silent output before a track is downloadable. Playlist ZIP files are CRC-checked and cannot contain zero-byte audio entries.
 - Original, MP3 (128/192/256/320 kbps), AAC/M4A, ALAC/M4A, FLAC, WAV, and Opus output, plus a separate ZIP export of completed tracks. The app reports source bitrate and whether a lossless output came from a detected lossless source. Transcoding does not restore missing fidelity.
 - Individual downloads and a disk-built ZIP with safe numbered filenames, Spotify cover artwork when available, playlist.m3u8, and manifest.json. ZIP creation does not buffer all audio in RAM.
 - Mobile-responsive PWA interface, reduced-motion support, installable home-screen entry, a progress view that survives page refresh, and static-only offline caching.
 - Upload, playlist-size, FFmpeg-timeout, encoder-concurrency, per-job upload-storage, and job-retention limits.
 
-Source search is limited to Internet Archive records with an explicit CC0, CC BY, CC BY-SA, or Public Domain Mark license URL in the item's metadata. That license declaration is supplied by the uploader; Soundloom records the item link, attribution, and license in the job manifest and ZIP, and users should inspect the source page before relying on it. CC BY requires attribution; CC BY-SA may require adaptations to carry the same or a compatible license. Soundloom does not search streaming services or general video sites. Many commercial Spotify tracks will have no authorized match. Matching scores are similarity measures, not probabilities; anything ambiguous waits for user review. New authorized providers can implement the SearchableAudioSource protocol in **backend/sources.py**.
+The YouTube adapter is disabled by default. To enable it, configure explicit licensed channel IDs, a rights acknowledgement, and the applicable license reference in server environment variables. Search results are restricted to those channel IDs; the adapter does not use browser cookies or playlists. The operator is responsible for confirming that both the audio rights and the source's download terms permit the configured use. Internet Archive license declarations come from uploaders and are not independently verified. Soundloom records source, attribution, and license details in job manifests. Matching scores are similarity measures, not probabilities; ambiguous matches wait for review. Many Spotify recordings will not exist in an enabled downloadable catalog. Matching scores are similarity measures, not probabilities; anything ambiguous waits for user review. New authorized providers can implement the SearchableAudioSource protocol in **backend/sources.py**.
 
 ## Local development
 
-Requires Python 3.12, FFmpeg/FFprobe, and a Spotify developer app for metadata lookup.
+Requires Python 3.12, FFmpeg/FFprobe, and optionally yt-dlp for the licensed-channel adapter. Public Spotify links up to 50 tracks can be previewed without a Spotify app; use CSV for larger playlists. Spotify credentials remain optional for richer metadata and private playlists.
 
 1. Create an environment and install pinned dependencies:
 
@@ -28,7 +28,7 @@ Requires Python 3.12, FFmpeg/FFprobe, and a Spotify developer app for metadata l
    pip install -r requirements.txt
    ~~~
 
-2. Copy .env.example to .env and set SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET. For private playlists, also set SPOTIFY_REDIRECT_URI and PUBLIC_BASE_URL, then add that exact callback URL to the Spotify developer app.
+2. Copy .env.example to .env. Spotify credentials are optional for public embeds. For private playlists, set Spotify credentials plus SPOTIFY_REDIRECT_URI and PUBLIC_BASE_URL, then register that exact callback URL in Spotify. To use YouTube search, enable it only after configuring the licensed channel IDs and rights reference described below.
 3. Set DATA_DIR to a writable directory and start the app:
 
    ~~~sh
@@ -55,7 +55,7 @@ Do not expose this local HTTP service directly to the public internet. Private-p
 
 The app keeps processing on one bounded server process and avoids a paid Redis dependency. Track conversion reuses the source's FFprobe result instead of probing the same file twice. Licensed-catalog lookups first inspect the indexed license field, fetch detailed metadata only for potentially eligible items, and overlap up to four detail requests per track while preserving the shared Internet Archive request pace. These are workload optimizations, not a universal speed ranking; audio-source rate limits and FFmpeg encoding remain the main throughput limits.
 
-Spotify's Web API and Internet Archive access do not require a per-download fee. Reliable public background processing and persistent storage do require a paid host or storage plan: Render's free service has no persistent disk and can sleep or restart, which can interrupt jobs and erase downloads. The optional `render-free.yaml` is a small, non-durable preview profile; use the regular `render.yaml` for durable server-side jobs.
+Spotify's Web API and Internet Archive access do not require a per-download fee. The optional yt-dlp dependency adds no service fee, but YouTube availability, channel coverage, and host resources constrain throughput. Reliable public background processing and persistent storage do require a paid host or storage plan: Render's free service has no persistent disk and can sleep or restart, which can interrupt jobs and erase downloads. The optional `render-free.yaml` is a small, non-durable preview profile; use the regular `render.yaml` for durable server-side jobs.
 
 ## Deploy on Render
 
@@ -70,9 +70,9 @@ Render's `PORT` is used by the included Dockerfile. The browser can leave while 
 ## Use on iPhone
 
 1. Open the deployed HTTPS URL in Safari.
-2. For direct Spotify-link previews, the server needs a configured developer app. If you cannot create one, open [TuneMyMusic's Spotify-to-file exporter](https://www.tunemymusic.com/transfer/spotify-to-file), sign in to Spotify through its authorization page, choose the playlist, and export a CSV. This avoids creating developer credentials for Soundloom; TuneMyMusic's free plan allows CSV/TXT export up to 500 tracks.
+2. Paste a public Spotify link for a collection of up to 50 tracks. For larger playlists, use [TuneMyMusic's Spotify-to-file exporter](https://www.tunemymusic.com/transfer/spotify-to-file), sign in through its authorization page, and export a CSV. Private playlists still need the configured Spotify OAuth connection.
 3. Return to Soundloom, tap **Import CSV**, select the exported file from Files, then choose tracks and an output format.
-4. Soundloom searches only explicitly licensed Internet Archive audio. Review a suggested match, or tap **Add audio** to select a file you own or may use from Files. Some commercial tracks will have no eligible source.
+4. Soundloom searches enabled authorized sources. Review uncertain matches before downloading; tracks without a permitted match stay unavailable. You can also tap **Add audio** to select a file you own or may use from Files.
 5. Leave the page if needed; the server keeps processing. Return in Safari on the same device to see saved job progress and download individual files or the ZIP.
 6. To add the app icon, use Safari's Share button, then **Add to Home Screen**.
 
@@ -92,6 +92,10 @@ Large exports are served as a file response from disk rather than loaded as a br
 | ARCHIVE_SEARCH_CONCURRENCY | 2 | Concurrent Internet Archive requests (1–4) |
 | MAX_PENDING_SOURCE_TASKS | 600 | Bound queued searches and downloads across jobs |
 | AUTO_MATCH_THRESHOLD | 0.94 | Minimum match score for automatic download (0.80–0.99) |
+| YOUTUBE_SOURCE_ENABLED | false | Enable the licensed channel adapter |
+| YOUTUBE_RIGHTS_ACKNOWLEDGED | false | Operator acknowledgement of download rights |
+| YOUTUBE_LICENSED_CHANNEL_IDS | empty | Comma-separated YouTube channel IDs covered by those rights |
+| YOUTUBE_LICENSE_NAME / YOUTUBE_LICENSE_URL | empty | License name and HTTPS reference attached to downloads |
 | MAX_JOB_STORAGE_BYTES | 8 GiB | Per-job total temporary storage cap |
 | MAX_TOTAL_STORAGE_BYTES | 20 GiB | Service-wide temporary storage cap |
 | FFMPEG_TIMEOUT_SECONDS | 1800 | Conversion timeout per track |
@@ -104,7 +108,7 @@ Install developer checks with pip install -r requirements-dev.txt, then run DATA
 
 ## Current boundaries
 
-- Automatic source availability depends on Internet Archive catalog results and explicit license metadata. An uploader's declaration is not an independent rights audit; inspect the item and license before reuse. No streaming-service or video-site downloads are implemented.
+- Automatic source availability depends on enabled catalogs and the operator's rights configuration. The optional YouTube adapter searches only configured channels and may return no candidate; it does not use cookies or download playlists. Verify the rights and source terms before enabling it.
 - Spotify API access and private playlist visibility depend on the configured Spotify developer app. Spotify may limit access to certain endpoints or accounts.
 - OAuth sessions are process-memory sessions, while jobs and uploaded audio persist in SQLite and the mounted volume. One Render service instance is required.
 - Source download and FFmpeg progress are reported; search has no ETA because provider response times and catalog results vary.

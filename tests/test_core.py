@@ -18,6 +18,52 @@ from backend.spotify import API_ROOT, SpotifyClient, SpotifyError, normalize_tra
 from backend.sources import SuppliedAudio, UserUploadSource
 from backend.playlist_import import PlaylistImportError, parse_playlist_csv
 from backend.store import Store
+from backend.spotify import SpotifyError
+
+from backend.spotify_embed import parse_embed_html
+from backend.youtube_source import YouTubeSearchSource
+
+
+def test_public_spotify_embed_parses_playlist_rows_without_api_credentials():
+    html = """
+    <title>Mix name | Spotify</title>
+    <link rel="preload" as="image" href="https://mosaic.scdn.co/300/cover">
+    <h1 data-testid="entity-title">Mix name</h1>
+    <ol><li data-testid="tracklist-row-0">
+      <h3>Song One</h3><h4>Artist One</h4>
+      <div data-testid="duration-cell">03:01</div>
+    </li></ol>
+    """
+    result = parse_embed_html("playlist", "0123456789012345678901", html)
+    assert result["name"] == "Mix name"
+    assert result["artwork"] == "https://mosaic.scdn.co/300/cover"
+    assert result["tracks"][0]["title"] == "Song One"
+    assert result["tracks"][0]["artist"] == "Artist One"
+    assert result["tracks"][0]["duration_ms"] == 181000
+    assert result["tracks"][0]["spotify_id"] is None
+
+
+def test_public_spotify_embed_enforces_track_cap():
+    html = """
+    <h1 data-testid="entity-title">Mix</h1>
+    <li data-testid="tracklist-row-0"><h3>One</h3><h4>A</h4></li>
+    <li data-testid="tracklist-row-1"><h3>Two</h3><h4>B</h4></li>
+    """
+    with pytest.raises(SpotifyError, match="track limit"):
+        parse_embed_html("playlist", "0123456789012345678901", html, max_tracks=1)
+
+
+def test_youtube_source_requires_explicit_rights_and_channel_allowlist():
+    source = YouTubeSearchSource(
+        enabled=True,
+        rights_acknowledged=False,
+        licensed_channel_ids={"UC0123456789012345678901"},
+        license_name="Music license",
+        license_url="https://example.com/license",
+    )
+    assert not source.enabled
+
+
 
 
 def test_parse_spotify_links_and_uris():

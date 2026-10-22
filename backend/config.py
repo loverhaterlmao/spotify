@@ -12,6 +12,13 @@ class Settings:
     max_tracks = max(1, min(300, int(os.getenv("MAX_TRACKS_PER_JOB", "300"))))
     max_encoders = max(1, min(4, int(os.getenv("MAX_ENCODERS", "2"))))
     archive_search_concurrency = max(1, min(4, int(os.getenv("ARCHIVE_SEARCH_CONCURRENCY", "2"))))
+    youtube_source_enabled = os.getenv("YOUTUBE_SOURCE_ENABLED", "false").lower() == "true"
+    youtube_rights_acknowledged = os.getenv("YOUTUBE_RIGHTS_ACKNOWLEDGED", "false").lower() == "true"
+    youtube_licensed_channel_ids = {
+        item.strip() for item in os.getenv("YOUTUBE_LICENSED_CHANNEL_IDS", "").split(",") if item.strip()
+    }
+    youtube_license_name = os.getenv("YOUTUBE_LICENSE_NAME", "")
+    youtube_license_url = os.getenv("YOUTUBE_LICENSE_URL", "")
     max_pending_source_tasks = max(10, min(2000, int(os.getenv("MAX_PENDING_SOURCE_TASKS", "600"))))
     auto_match_threshold = max(0.80, min(0.99, float(os.getenv("AUTO_MATCH_THRESHOLD", "0.94"))))
     retention_days = max(1, int(os.getenv("RETENTION_DAYS", "7")))
