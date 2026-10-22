@@ -60,9 +60,9 @@ def test_track_metadata_normalization():
 
 def test_playlist_csv_import_normalizes_tunemymusic_export():
     data = (
-        "Track Name,Artist Name(s),Album Name,Duration (ms),Track URI,Track Number,ISRC,Explicit\\n"
+        "Track Name,Artist Name(s),Album Name,Duration (ms),Track URI,Track Number,ISRC,Explicit\n"
         'See You Again (feat. Kali Uchis),"Tyler, The Creator; Kali Uchis",Flower Boy,180386,'
-        "spotify:track:7KA4W4McWYRpgf0fWsJZWB,10,USQX91701234,false\\n"
+        "spotify:track:7KA4W4McWYRpgf0fWsJZWB,10,USQX91701234,false\n"
     ).encode()
     result = parse_playlist_csv(data, "my-playlist.csv", 300)
     track = result["tracks"][0]
@@ -78,8 +78,8 @@ def test_playlist_csv_import_normalizes_tunemymusic_export():
 
 def test_playlist_csv_import_rejects_missing_columns_and_track_limit():
     with pytest.raises(PlaylistImportError, match="title and artist"):
-        parse_playlist_csv(b"Track Name,Duration\\nSong,123000\\n", "x.csv", 10)
-    data = b"Track Name,Artist\\nOne,Artist\\nTwo,Artist\\n"
+        parse_playlist_csv(b"Track Name,Duration\nSong,123000\n", "x.csv", 10)
+    data = b"Track Name,Artist\nOne,Artist\nTwo,Artist\n"
     with pytest.raises(PlaylistImportError, match="track limit"):
         parse_playlist_csv(data, "x.csv", 1)
 
@@ -157,6 +157,24 @@ def test_archive_is_ordered_and_contains_manifest(tmp_path, monkeypatch):
         main.build_archive(job_id, job, local_store.tracks(job_id))
     assert local_store.track(job_id, "first")["status"] == "failed"
     local_store.close()
+
+
+def test_csv_analysis_endpoint_works_without_spotify_credentials(tmp_path, monkeypatch):
+    from backend import main
+    monkeypatch.setattr(main.settings, "data_dir", tmp_path / "csv-api-data")
+    data = b"""Track Name,Artist Name(s),Album Name
+Example Song,Example Artist,Example Album
+"""
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/api/analyze/csv",
+            files={"file": ("playlist.csv", data, "text/csv")},
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["kind"] == "playlist"
+        assert payload["tracks"][0]["title"] == "Example Song"
+        assert payload["tracks"][0]["artist"] == "Example Artist"
 
 
 def test_api_rejects_invalid_spotify_link_without_network(tmp_path, monkeypatch):
