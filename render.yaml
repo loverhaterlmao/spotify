@@ -23,3 +23,13 @@ services:
         sync: false
       - key: PUBLIC_BASE_URL
         sync: false
+      - key: YOUTUBE_SOURCE_ENABLED
+        value: "false"
+      - key: YOUTUBE_RIGHTS_ACKNOWLEDGED
+        value: "false"
+      - key: YOUTUBE_LICENSED_CHANNEL_IDS
+        sync: false
+      - key: YOUTUBE_LICENSE_NAME
+        sync: false
+      - key: YOUTUBE_LICENSE_URL
+        sync: false

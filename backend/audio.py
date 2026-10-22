@@ -11,7 +11,7 @@ from typing import Awaitable, Callable
 
 ALLOWED_INPUT_EXTENSIONS = {
     ".mp3", ".m4a", ".mp4", ".aac", ".flac", ".wav", ".ogg", ".opus",
-    ".aiff", ".aif", ".wma", ".m4b",
+    ".aiff", ".aif", ".wma", ".m4b", ".webm",
 }
 FORMAT_EXTENSIONS = {
     "mp3": ".mp3", "aac": ".m4a", "flac": ".flac", "wav": ".wav",
