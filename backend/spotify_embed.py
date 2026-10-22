@@ -120,7 +120,6 @@ def parse_embed_html(kind: str, item_id: str, body: str, max_tracks: int = 50) -
         cover_sources = (entity.get("coverArt") or {}).get("sources") or []
         for cover in cover_sources:
             if isinstance(cover, dict):
-                before = parser.artwork
                 parser._art(cover.get("url"))
                 if parser.artwork:
                     artwork = parser.artwork

@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Awaitable, Callable
 from urllib.parse import urlparse
 
-from .audio import ALLOWED_INPUT_EXTENSIONS
 from .sources import SearchableAudioSource
 
 
