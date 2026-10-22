@@ -183,7 +183,7 @@ function renderJob(job) {
       track.status === "failed" ? "Needs attention" : track.status;
     const canUpload = ["awaiting_upload", "needs_review", "failed"].includes(track.status);
     const uploadControl = canUpload ?
-      '<label class="button button-quiet upload-control" for="file-' + track.id + '">Add audio<input id="file-' + track.id + '" class="audio-file" type="file" accept="audio/*,.flac,.opus,.ogg" data-id="' + track.id + '" hidden></label>' : "";
+      '<label class="button button-quiet upload-control" for="file-' + track.id + '">Add audio<input id="file-' + track.id + '" class="audio-file" type="file" accept=".mp3,.m4a,.mp4,.aac,.flac,.wav,.ogg,.opus,.aiff,.aif,.wma,.m4b,audio/*" data-id="' + track.id + '" hidden></label>' : "";
     const canSearch = ["awaiting_upload", "needs_review", "failed"].includes(track.status);
     const searchControl = canSearch ?
       '<button class="button button-quiet upload-control source-search" data-id="' + track.id + '" type="button">' +

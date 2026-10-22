@@ -60,6 +60,8 @@ def test_audio_options_and_safe_unicode_filenames():
     assert output_options("mp3", "192") == (["-c:a", "libmp3lame", "-b:a", "192k", "-id3v2_version", "3"], ".mp3")
     assert output_options("original", None) == ([], "")
     assert output_options("flac", None)[1] == ".flac"
+    assert output_options("aac", None)[1] == ".m4a"
+    assert output_options("alac", None)[1] == ".m4a"
     with pytest.raises(AudioError):
         output_options("not-a-format", None)
     name = safe_filename("../../été: live?.mp3")
@@ -121,6 +123,11 @@ def test_archive_is_ordered_and_contains_manifest(tmp_path, monkeypatch):
         assert any(name.endswith("SOURCES.txt") for name in names)
         playlist = zf.read(next(name for name in names if name.endswith("playlist.m3u8"))).decode()
         assert "#EXTM3U" in playlist and "02 - Artist - First.mp3" in playlist
+    source.write_bytes(b"")
+    assert main.resolve_output(job_id, "first") is None
+    with pytest.raises(AudioError, match="empty or damaged audio"):
+        main.build_archive(job_id, job, local_store.tracks(job_id))
+    assert local_store.track(job_id, "first")["status"] == "failed"
     local_store.close()
 
 
@@ -174,6 +181,27 @@ def test_frontend_contains_mobile_upload_and_job_restore_flow():
     assert 'id="format-select"' in html
     assert 'localStorage.setItem("soundloom-job"' in js
     assert "/audio" in js and "/archive.zip" in js and "/retry" in js
+    assert ".mp3,.m4a,.mp4,.aac,.flac,.wav,.ogg,.opus" in js
+    assert "FLAC" in html and "MP3" in html and "M4A" in html
+
+
+
+
+def test_empty_and_silent_audio_are_rejected(tmp_path):
+    empty = tmp_path / "empty.mp3"
+    empty.write_bytes(b"")
+    with pytest.raises(AudioError, match="empty"):
+        asyncio.run(probe_audio(empty))
+
+    if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+        pytest.skip("FFmpeg is required for the silent-audio validation test.")
+    silence = tmp_path / "silence.wav"
+    subprocess.run([
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi",
+        "-i", "anullsrc=r=44100:cl=stereo", "-t", "1", "-c:a", "pcm_s16le", str(silence),
+    ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    with pytest.raises(AudioError, match="silent"):
+        asyncio.run(probe_audio(silence, verify_signal=True))
 
 
 def test_synthetic_wav_is_encoded_and_verified(tmp_path):
@@ -198,7 +226,7 @@ def test_synthetic_wav_is_encoded_and_verified(tmp_path):
     result = asyncio.run(run())
     output = Path(result["output_path"])
     assert output.is_file() and output.suffix == ".mp3"
-    inspected = asyncio.run(probe_audio(output))
+    inspected = asyncio.run(probe_audio(output, verify_signal=True))
     assert inspected["codec"] == "mp3"
     assert 0.9 <= inspected["duration"] <= 1.2
     assert result["lossless_from_source"] is False

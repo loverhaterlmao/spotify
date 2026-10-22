@@ -125,7 +125,7 @@ def track_view(track: dict, token: str, job_id: str, rows: list[dict] | None = N
 
 
 def job_view(job: dict, token: str) -> dict:
-    tracks = database().tracks(job["id"])
+    tracks = mark_missing_outputs(job["id"], database().tracks(job["id"]))
     total = len(tracks)
     done_states = {"completed", "failed", "duplicate", "cancelled", "skipped"}
     settled = sum(1 for t in tracks if t["status"] in done_states)
@@ -445,6 +445,27 @@ async def download_source_candidate(job_id: str, track_id: str, candidate: dict,
         await refresh_job(job_id)
 
 
+def mark_missing_outputs(job_id: str, rows: list[dict]) -> list[dict]:
+    """Keep completed job state aligned with the files that can actually be downloaded."""
+    changed = False
+    audio_root = (settings.data_dir / "jobs" / job_id / "audio").resolve()
+    for row in rows:
+        if row["status"] != "completed" or not row.get("output_path"):
+            continue
+        path = Path(row["output_path"]).resolve()
+        try:
+            valid = path.parent == audio_root and path.is_file() and path.stat().st_size > 0
+        except OSError:
+            valid = False
+        if not valid:
+            database().set_track(
+                row["id"], status="failed", progress=0,
+                error="The audio output is missing or empty. Retry this track.",
+            )
+            changed = True
+    return database().tracks(job_id) if changed else rows
+
+
 def resolve_output(job_id: str, track_id: str, rows: list[dict] | None = None) -> Path | None:
     rows = rows if rows is not None else database().tracks(job_id)
     row = next((t for t in rows if t["id"] == track_id), None)
@@ -456,7 +477,10 @@ def resolve_output(job_id: str, track_id: str, rows: list[dict] | None = None) -
         return None
     path = Path(row["output_path"]).resolve()
     audio_root = (settings.data_dir / "jobs" / job_id / "audio").resolve()
-    if path.parent != audio_root or not path.is_file():
+    try:
+        if path.parent != audio_root or not path.is_file() or path.stat().st_size <= 0:
+            return None
+    except OSError:
         return None
     return path
 
@@ -499,6 +523,12 @@ def build_archive(job_id: str, job: dict, tracks: list[dict], cover: tuple[bytes
                 playlist_lines.append(filename)
                 item["filename"] = filename
                 item["status"] = "completed" if row["status"] == "duplicate" else row["status"]
+            elif row["status"] == "completed":
+                item["status"] = "failed"
+                item["error"] = item["error"] or "The audio output is missing or empty."
+                database().set_track(
+                    row["id"], status="failed", progress=0, error=item["error"]
+                )
             if item["source"]:
                 source_credits.append(
                     f"{item['position']:02d}. {item['source'].get('attribution') or item['artist']} — "
@@ -516,6 +546,20 @@ def build_archive(job_id: str, job: dict, tracks: list[dict], cover: tuple[bytes
             archive.writestr(f"{folder_name}/cover{cover[1]}", cover[0])
         archive.writestr(f"{folder_name}/playlist.m3u8", "\n".join(playlist_lines) + "\n")
         archive.writestr(f"{folder_name}/manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+    try:
+        with zipfile.ZipFile(temp_path, "r") as built:
+            audio_entries = [
+                item for item in built.infolist()
+                if Path(item.filename).suffix.lower() in ALLOWED_INPUT_EXTENSIONS
+            ]
+            if not audio_entries or any(item.file_size <= 0 for item in audio_entries) or built.testzip():
+                raise AudioError("The playlist ZIP contains an empty or damaged audio file.")
+    except (OSError, zipfile.BadZipFile):
+        temp_path.unlink(missing_ok=True)
+        raise AudioError("The playlist ZIP failed integrity verification.")
+    except AudioError:
+        temp_path.unlink(missing_ok=True)
+        raise
     os.replace(temp_path, final_path)
     return final_path
 
@@ -922,9 +966,10 @@ async def download_track(
     x_job_token: str | None = Header(default=None),
 ):
     require_job(job_id, x_job_token or token)
-    path = resolve_output(job_id, track_id)
+    rows = mark_missing_outputs(job_id, database().tracks(job_id))
+    path = resolve_output(job_id, track_id, rows)
     if not path:
-        raise HTTPException(409, "This track is not ready to download.")
+        raise HTTPException(409, "This track has no verified audio file ready to download.")
     track = database().track(job_id, track_id)
     filename = f"{track['position']:02d} - {safe_filename(track['artist'])} - {safe_filename(track['title'])}{path.suffix}"
     return FileResponse(path, filename=filename, media_type="application/octet-stream")
@@ -933,7 +978,7 @@ async def download_track(
 @app.get("/api/jobs/{job_id}/archive.zip")
 async def download_archive(job_id: str, token: str = Query(...)):
     job = require_job(job_id, token)
-    rows = database().tracks(job_id)
+    rows = mark_missing_outputs(job_id, database().tracks(job_id))
     output_paths = [resolve_output(job_id, t["id"], rows) for t in rows]
     if not any(output_paths):
         raise HTTPException(409, "No completed tracks are ready to export.")
@@ -958,9 +1003,9 @@ async def download_archive(job_id: str, token: str = Query(...)):
             storage_reservations["__global__"] += archive_size
         try:
             path = await asyncio.to_thread(build_archive, job_id, job, rows, cover)
-        except (OSError, zipfile.BadZipFile):
+        except (OSError, zipfile.BadZipFile, AudioError):
             logger.exception("archive build failed job=%s", job_id)
-            raise HTTPException(500, "The archive could not be prepared.")
+            raise HTTPException(500, "The archive could not be prepared because an audio file failed verification.")
         finally:
             async with storage_lock:
                 storage_reservations[job_id] = max(0, storage_reservations[job_id] - archive_size)

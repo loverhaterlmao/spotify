@@ -50,8 +50,46 @@ def output_options(output_format: str, bitrate: str | None) -> tuple[list[str], 
     raise AudioError("Choose a supported output format.")
 
 
-async def probe_audio(path: Path) -> dict:
+async def verify_audio_signal(path: Path, timeout_seconds: int = 120) -> None:
+    """Reject streams with no decoded audio or only digital silence."""
+    if not path.is_file() or path.stat().st_size == 0:
+        raise AudioError("The audio file is empty and contains no audio.")
+    process = None
     try:
+        process = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-hide_banner", "-nostats", "-nostdin", "-xerror", "-loglevel", "info",
+            "-protocol_whitelist", "file,pipe", "-i", str(path), "-map", "0:a:0", "-vn",
+            "-af", "volumedetect", "-f", "null", "-",
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout_seconds)
+    except asyncio.TimeoutError as exc:
+        if process and process.returncode is None:
+            process.kill()
+            await process.wait()
+        raise AudioError("Audio content verification exceeded the time limit.") from exc
+    except OSError as exc:
+        raise AudioError("FFmpeg is unavailable or could not verify the audio content.") from exc
+    except asyncio.CancelledError:
+        if process and process.returncode is None:
+            process.kill()
+            await process.wait()
+        raise
+    if process.returncode != 0:
+        raise AudioError("The audio file could not be fully decoded.")
+    report = stderr.decode("utf-8", errors="replace")
+    levels = re.findall(r"max_volume:\s*(-inf|[+-]?\d+(?:\.\d+)?)\s*dB", report, re.IGNORECASE)
+    if not levels:
+        raise AudioError("The audio file did not yield any decoded sound samples.")
+    level = levels[-1].casefold()
+    if level == "-inf" or float(level) < -90:
+        raise AudioError("The audio file is silent and contains no usable sound.")
+
+
+async def probe_audio(path: Path, verify_signal: bool = False) -> dict:
+    try:
+        if not path.is_file() or path.stat().st_size == 0:
+            raise AudioError("The audio file is empty and contains no audio.")
         proc = await asyncio.create_subprocess_exec(
             "ffprobe", "-v", "error", "-show_entries",
             "format=duration,bit_rate,format_name:stream=codec_type,codec_name,sample_rate,bit_rate,channels",
@@ -59,10 +97,12 @@ async def probe_audio(path: Path) -> dict:
             stderr=asyncio.subprocess.DEVNULL,
         )
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+    except AudioError:
+        raise
     except (OSError, asyncio.TimeoutError) as exc:
         raise AudioError("Could not inspect this audio file.") from exc
     if proc.returncode != 0:
-        raise AudioError("The uploaded file is not readable audio.")
+        raise AudioError("The audio file is not readable.")
     try:
         data = json.loads(stdout)
         audio = next(s for s in data.get("streams", []) if s.get("codec_type") == "audio")
@@ -70,7 +110,9 @@ async def probe_audio(path: Path) -> dict:
         if not math.isfinite(duration) or duration <= 0 or duration > 4 * 60 * 60:
             raise ValueError("duration")
     except (ValueError, TypeError, StopIteration, json.JSONDecodeError) as exc:
-        raise AudioError("The uploaded file does not contain a supported audio stream.") from exc
+        raise AudioError("The file does not contain a supported audio stream.") from exc
+    if verify_signal:
+        await verify_audio_signal(path)
     format_info = data.get("format", {})
     bitrate = format_info.get("bit_rate") or audio.get("bit_rate")
     codec = str(audio.get("codec_name", "")).lower()
@@ -93,7 +135,7 @@ async def convert_audio(
     timeout_seconds: int,
     on_progress: Callable[[float], Awaitable[None]],
 ) -> dict:
-    source_info = await probe_audio(source)
+    source_info = await probe_audio(source, verify_signal=False)
     destination.parent.mkdir(parents=True, exist_ok=True)
     if output_format == "original":
         extension = source.suffix.lower()
@@ -102,7 +144,7 @@ async def convert_audio(
         temporary = destination.with_name(destination.stem + ".partial" + extension)
         try:
             await asyncio.to_thread(shutil.copyfile, source, temporary)
-            await probe_audio(temporary)
+            await probe_audio(temporary, verify_signal=True)
             os.replace(temporary, destination.with_suffix(extension))
             await on_progress(100)
             return {**source_info, "output_path": str(destination.with_suffix(extension)),
@@ -150,7 +192,7 @@ async def convert_audio(
         await asyncio.wait_for(process.wait(), timeout=max(0.01, deadline - asyncio.get_running_loop().time()))
         if process.returncode != 0 or not temporary.exists() or temporary.stat().st_size == 0:
             raise AudioError("FFmpeg could not encode this file.")
-        verified = await probe_audio(temporary)
+        verified = await probe_audio(temporary, verify_signal=True)
         if abs(verified["duration"] - source_info["duration"]) > max(3.0, source_info["duration"] * 0.02):
             raise AudioError("The output audio failed duration verification.")
         os.replace(temporary, output)
