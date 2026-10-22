@@ -27,6 +27,7 @@ from .store import Store
 from .sources import SuppliedAudio, UserUploadSource
 from .archive_source import ArchiveSourceError, InternetArchiveSource
 from .matching import rank_candidates
+from .playlist_import import PlaylistImportError, parse_playlist_csv
 
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
@@ -691,6 +692,25 @@ async def auth_logout(request: Request):
     return response
 
 
+def cache_analysis(result: dict) -> dict:
+    if not result.get("tracks"):
+        raise HTTPException(422, "No tracks were found in this playlist.")
+    analysis_id = secrets.token_urlsafe(32)
+    result = {
+        **result,
+        "tracks": [{**track, "index": i} for i, track in enumerate(result["tracks"], 1)],
+    }
+    now = time.time()
+    for key, (created, _) in list(analyses.items()):
+        if now - created > 3600:
+            analyses.pop(key, None)
+    analyses[analysis_id] = (now, result)
+    if len(analyses) > 2000:
+        for stale_id in list(analyses)[:len(analyses) - 2000]:
+            analyses.pop(stale_id, None)
+    return {"analysis_id": analysis_id, **result}
+
+
 @app.post("/api/analyze")
 async def analyze(body: AnalyzeRequest, request: Request):
     throttle(request, "analyze", 20)
@@ -701,19 +721,26 @@ async def analyze(body: AnalyzeRequest, request: Request):
         raise HTTPException(400, str(exc)) from exc
     if not result["tracks"]:
         raise HTTPException(422, "This Spotify item has no available tracks.")
-    analysis_id = secrets.token_urlsafe(32)
-    result["tracks"] = [
-        {**track, "index": i} for i, track in enumerate(result["tracks"], 1)
-    ]
-    now = time.time()
-    for key, (created, _) in list(analyses.items()):
-        if now - created > 3600:
-            analyses.pop(key, None)
-    analyses[analysis_id] = (now, result)
-    if len(analyses) > 2000:
-        for stale_id in list(analyses)[:len(analyses) - 2000]:
-            analyses.pop(stale_id, None)
-    return {"analysis_id": analysis_id, **result}
+    return cache_analysis(result)
+
+
+@app.post("/api/analyze/csv")
+async def analyze_csv(request: Request, file: UploadFile = File(...)):
+    throttle(request, "analyze", 20)
+    if Path(file.filename or "").suffix.lower() != ".csv":
+        await file.close()
+        raise HTTPException(415, "Choose a .csv playlist export.")
+    try:
+        raw = await file.read(2 * 1024 * 1024 + 1)
+    finally:
+        await file.close()
+    if len(raw) > 2 * 1024 * 1024:
+        raise HTTPException(413, "The playlist CSV must be no larger than 2 MiB.")
+    try:
+        result = parse_playlist_csv(raw, file.filename or "", settings.max_tracks)
+    except PlaylistImportError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return cache_analysis(result)
 
 
 @app.post("/api/jobs")
