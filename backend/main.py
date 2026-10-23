@@ -33,7 +33,7 @@ from .playlist_import import PlaylistImportError, parse_playlist_csv
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("spotify-audio")
-TERMS_VERSION = "2026-10-23"
+TERMS_VERSION = "2026-10-23.2"
 analyses: dict[str, tuple[float, dict]] = {}
 track_tasks: dict[str, asyncio.Task] = {}
 archive_locks: dict[str, asyncio.Lock] = {}
