@@ -81,6 +81,14 @@ def database() -> Store:
     return store
 
 
+def require_terms_acceptance(request: Request) -> dict:
+    token = request.cookies.get("soundloom_terms")
+    acceptance = database().terms_acceptance(token) if token else None
+    if not acceptance or acceptance["terms_version"] != TERMS_VERSION:
+        raise HTTPException(403, "Accept the current Soundloom terms of use before using this feature.")
+    return acceptance
+
+
 def require_job(job_id: str, token: str | None) -> dict:
     if not token:
         raise HTTPException(404, "Job not found.")
@@ -787,6 +795,7 @@ def cache_analysis(result: dict) -> dict:
 @app.post("/api/analyze")
 async def analyze(body: AnalyzeRequest, request: Request):
     throttle(request, "analyze", 20)
+    require_terms_acceptance(request)
     session_id = request.cookies.get("spotify_session")
     try:
         result = await spotify.resolve(body.url, session_id, settings.max_tracks)
@@ -800,6 +809,7 @@ async def analyze(body: AnalyzeRequest, request: Request):
 @app.post("/api/analyze/csv")
 async def analyze_csv(request: Request, file: UploadFile = File(...)):
     throttle(request, "analyze", 20)
+    require_terms_acceptance(request)
     if Path(file.filename or "").suffix.lower() != ".csv":
         await file.close()
         raise HTTPException(415, "Choose a .csv playlist export.")
@@ -819,10 +829,7 @@ async def analyze_csv(request: Request, file: UploadFile = File(...)):
 @app.post("/api/jobs")
 async def create_job(body: CreateJobRequest, request: Request):
     throttle(request, "create", 10)
-    acceptance_token = request.cookies.get("soundloom_terms")
-    acceptance = database().terms_acceptance(acceptance_token) if acceptance_token else None
-    if not acceptance or acceptance["terms_version"] != TERMS_VERSION:
-        raise HTTPException(403, "Accept the current Soundloom terms of use before preparing audio.")
+    acceptance = require_terms_acceptance(request)
     cached = analyses.pop(body.analysis_id, None)
     if not cached or time.time() - cached[0] > 3600:
         raise HTTPException(400, "The preview expired. Analyze the Spotify link again.")
