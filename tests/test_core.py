@@ -253,6 +253,7 @@ def test_csv_analysis_endpoint_works_without_spotify_credentials(tmp_path, monke
 Example Song,Example Artist,Example Album
 """
     with TestClient(main.app) as client:
+        assert client.post("/api/terms/accept", json={"accepted": True}).status_code == 200
         response = client.post(
             "/api/analyze/csv",
             files={"file": ("playlist.csv", data, "text/csv")},
@@ -268,6 +269,7 @@ def test_api_rejects_invalid_spotify_link_without_network(tmp_path, monkeypatch)
     from backend import main
     monkeypatch.setattr(main.settings, "data_dir", tmp_path / "api-data")
     with TestClient(main.app) as client:
+        assert client.post("/api/terms/accept", json={"accepted": True}).status_code == 200
         response = client.post("/api/analyze", json={"url": "https://not-spotify.example/track/abc"})
         assert response.status_code == 400
         assert "Spotify" in response.json()["detail"]
