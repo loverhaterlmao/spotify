@@ -80,6 +80,20 @@ def test_public_spotify_embed_enforces_track_cap():
         parse_embed_html("playlist", "0123456789012345678901", html, max_tracks=1)
 
 
+def test_public_spotify_embed_accepts_more_than_thirty_tracks():
+    rows = "".join(
+        f'<li data-testid="tracklist-row-{index}"><h3>Song {index}</h3><h4>Artist</h4></li>'
+        for index in range(31)
+    )
+    result = parse_embed_html(
+        "playlist", "0123456789012345678901",
+        f'<h1 data-testid="entity-title">Mix</h1>{rows}',
+        max_tracks=100,
+    )
+    assert len(result["tracks"]) == 31
+    assert result["tracks"][-1]["title"] == "Song 30"
+
+
 def test_youtube_source_requires_explicit_rights_and_channel_allowlist():
     source = YouTubeSearchSource(
         enabled=True,
