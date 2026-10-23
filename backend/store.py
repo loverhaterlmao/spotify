@@ -20,7 +20,7 @@ class Store:
                     id TEXT PRIMARY KEY, token_hash TEXT NOT NULL, name TEXT NOT NULL,
                     artwork TEXT, kind TEXT NOT NULL, output_format TEXT NOT NULL,
                     bitrate TEXT, status TEXT NOT NULL, created_at REAL NOT NULL,
-                    error TEXT
+                    error TEXT, terms_version TEXT NOT NULL DEFAULT '', terms_accepted_at REAL
                 );
                 CREATE TABLE IF NOT EXISTS tracks (
                     id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
@@ -35,6 +35,11 @@ class Store:
                 );
                 CREATE INDEX IF NOT EXISTS tracks_job_position ON tracks(job_id, position);
             """)
+            job_columns = {row["name"] for row in self.db.execute("PRAGMA table_info(jobs)")}
+            if "terms_version" not in job_columns:
+                self.db.execute("ALTER TABLE jobs ADD COLUMN terms_version TEXT NOT NULL DEFAULT ''")
+            if "terms_accepted_at" not in job_columns:
+                self.db.execute("ALTER TABLE jobs ADD COLUMN terms_accepted_at REAL")
             columns = {row["name"] for row in self.db.execute("PRAGMA table_info(tracks)")}
             if "track_number" not in columns:
                 self.db.execute("ALTER TABLE tracks ADD COLUMN track_number INTEGER")
@@ -58,9 +63,12 @@ class Store:
     def create_job(self, job: dict[str, Any], token: str, tracks: list[dict[str, Any]]) -> None:
         with self.lock, self.db:
             self.db.execute(
-                "INSERT INTO jobs VALUES(?,?,?,?,?,?,?,?,?,NULL)",
+                "INSERT INTO jobs "
+                "(id,token_hash,name,artwork,kind,output_format,bitrate,status,created_at,error,terms_version,terms_accepted_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,NULL,?,?)",
                 (job["id"], self.hash_token(token), job["name"], job.get("artwork"),
-                 job["kind"], job["format"], job.get("bitrate"), "awaiting_upload", job["created_at"]),
+                 job["kind"], job["format"], job.get("bitrate"), "awaiting_upload", job["created_at"],
+                 job.get("terms_version", ""), job.get("terms_accepted_at")),
             )
             self.db.executemany(
                 """INSERT INTO tracks
