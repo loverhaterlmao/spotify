@@ -269,6 +269,8 @@ def test_api_rejects_invalid_spotify_link_without_network(tmp_path, monkeypatch)
     from backend import main
     monkeypatch.setattr(main.settings, "data_dir", tmp_path / "api-data")
     with TestClient(main.app) as client:
+        response = client.post("/api/analyze", json={"url": "https://not-spotify.example/track/abc"})
+        assert response.status_code == 403
         assert client.post("/api/terms/accept", json={"accepted": True}).status_code == 200
         response = client.post("/api/analyze", json={"url": "https://not-spotify.example/track/abc"})
         assert response.status_code == 400
@@ -312,6 +314,7 @@ def test_frontend_contains_mobile_upload_and_job_restore_flow():
     root = Path(__file__).resolve().parents[1] / "frontend"
     html = (root / "index.html").read_text()
     js = (root / "app.js").read_text()
+    terms = (root / "terms.html").read_text()
     assert 'id="spotify-url"' in html
     assert 'id="playlist-csv"' in html and "/api/analyze/csv" in js
     assert 'id="format-select"' in html
@@ -319,6 +322,7 @@ def test_frontend_contains_mobile_upload_and_job_restore_flow():
     assert 'id="terms-accept-checkbox"' in html
     assert "/api/terms/accept" in js
     assert "terms_accepted" not in js
+    assert "indemnify" in terms and "unauthorized copies" in terms
     assert 'localStorage.setItem("soundloom-job"' in js
     assert "/audio" in js and "/archive.zip" in js and "/retry" in js
     assert ".mp3,.m4a,.mp4,.aac,.flac,.wav,.ogg,.opus" in js
