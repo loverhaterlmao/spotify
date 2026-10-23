@@ -313,6 +313,10 @@ def test_frontend_contains_mobile_upload_and_job_restore_flow():
     assert 'id="spotify-url"' in html
     assert 'id="playlist-csv"' in html and "/api/analyze/csv" in js
     assert 'id="format-select"' in html
+    assert 'id="terms-gate"' in html
+    assert 'id="terms-accept-checkbox"' in html
+    assert "/api/terms/accept" in js
+    assert "terms_accepted" not in js
     assert 'localStorage.setItem("soundloom-job"' in js
     assert "/audio" in js and "/archive.zip" in js and "/retry" in js
     assert ".mp3,.m4a,.mp4,.aac,.flac,.wav,.ogg,.opus" in js
@@ -494,10 +498,20 @@ def test_job_creation_starts_authorized_source_search(tmp_path, monkeypatch):
             "analysis_id": analysis_id, "selected_indices": [1],
             "format": "mp3", "bitrate": "192",
         }
+        response = client.get("/api/terms/status")
+        assert response.status_code == 200
+        assert response.json()["accepted"] is False
         response = client.post("/api/jobs", json=request)
-        assert response.status_code == 400
+        assert response.status_code == 403
         assert "terms of use" in response.json()["detail"]
-        response = client.post("/api/jobs", json={**request, "terms_accepted": True})
+        accepted = client.post("/api/terms/accept", json={"accepted": True})
+        assert accepted.status_code == 200
+        assert accepted.cookies.get("soundloom_terms")
+        stored_acceptance = main.store.terms_acceptance(client.cookies.get("soundloom_terms"))
+        assert stored_acceptance["terms_version"] == main.TERMS_VERSION
+        response = client.get("/api/terms/status")
+        assert response.json()["accepted"] is True
+        response = client.post("/api/jobs", json=request)
         assert response.status_code == 200
         payload = response.json()
         assert payload["job"]["tracks"][0]["status"] == "searching"
@@ -505,7 +519,7 @@ def test_job_creation_starts_authorized_source_search(tmp_path, monkeypatch):
         track_id = payload["job"]["tracks"][0]["id"]
         stored_job = main.store.job(job_id)
         assert stored_job["terms_version"] == main.TERMS_VERSION
-        assert stored_job["terms_accepted_at"] is not None
+        assert stored_job["terms_accepted_at"] == stored_acceptance["accepted_at"]
         assert started == [(job_id, track_id)]
         candidate = {
             "id": "b" * 32, "title": "Sample Song", "artist": "The Example",
