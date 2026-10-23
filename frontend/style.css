@@ -69,6 +69,15 @@ h1 span { background: linear-gradient(94deg, #f1a1bd 5%, #c9a7ff 88%); -webkit-b
 .track-copy span { color: #aaa3ac; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 11px; }
 .track-duration { color: #8c858f; font-size: 11px; font-variant-numeric: tabular-nums; }
 .fine-print { color: #8c838e; font-size: 11px; line-height: 1.5; margin: 17px 0 0; }
+.usage-agreement { display: flex; margin: 16px 0 12px; padding: 12px; border: 1px solid #c19be52c; border-radius: 12px; background: #ffffff06; }
+.usage-agreement input { flex: 0 0 auto; width: 17px; height: 17px; margin: 2px 10px 0 0; accent-color: #c7a1f3; }
+.usage-agreement span { color: #c1bbc4; font-size: 11px; line-height: 1.55; }
+.usage-agreement a, footer a { color: #ceb3ed; text-decoration: underline; text-underline-offset: 2px; }
+.terms-page { max-width: 780px; margin: 55px auto; padding: 25px; }
+.terms-page h1 { margin: 12px 0; font-size: clamp(32px, 6vw, 48px); }
+.terms-page h2 { margin: 27px 0 8px; font-size: 17px; }
+.terms-page p, .terms-page li { color: #c1bbc4; font-size: 13px; line-height: 1.65; }
+.terms-page a { color: #ceb3ed; }
 .job-panel { margin-top: 32px; }
 .job-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 15px; }
 .progress-card { margin: 24px 0 12px; padding: 16px; background: #ffffff06; border: 1px solid #ffffff0c; border-radius: 15px; }

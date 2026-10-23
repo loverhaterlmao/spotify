@@ -34,6 +34,7 @@ function setMessage(text, error = false) {
 }
 function renderPreview(data) {
   analysis = data;
+  $("#terms-accepted").checked = false;
   previewSection.hidden = false;
   jobSection.hidden = true;
   $("#collection-kind").textContent = data.kind.toUpperCase();
@@ -61,11 +62,11 @@ function renderPreview(data) {
 function updateSelection() {
   const selected = [...document.querySelectorAll(".track-check:checked")].length;
   $("#selection-count").textContent = selected + " selected";
-  $("#start-job").disabled = !selected || !analysis;
+  $("#start-job").disabled = !selected || !analysis || !$("#terms-accepted").checked;
   $("#select-all").textContent = selected ? "Deselect all" : "Select all";
 }
 document.addEventListener("change", (event) => {
-  if (event.target.matches(".track-check")) updateSelection();
+  if (event.target.matches(".track-check") || event.target.id === "terms-accepted") updateSelection();
   if (event.target.id === "format-select") {
     $("#bitrate-setting").hidden = event.target.value !== "mp3";
   }
@@ -134,6 +135,7 @@ $("#start-job").addEventListener("click", async () => {
       method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({
         analysis_id: analysis.analysis_id, selected_indices,
+        terms_accepted: $("#terms-accepted").checked,
         format: $("#format-select").value, bitrate: $("#bitrate-select").value
       })
     });

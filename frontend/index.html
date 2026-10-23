@@ -73,6 +73,10 @@
         <div class="collection-info"><div class="eyebrow" id="collection-kind"></div><h2 id="collection-name"></h2><p id="collection-summary"></p></div>
         <button id="select-all" class="button button-quiet button-small" type="button">Deselect all</button>
       </div>
+      <label class="usage-agreement">
+        <input id="terms-accepted" type="checkbox">
+        <span>I have permission to download and process the audio I select. I agree to the <a href="/terms.html" target="_blank" rel="noopener noreferrer">Terms of Use</a> and will not use Soundloom for unauthorized copying, distribution, or DRM circumvention.</span>
+      </label>
       <div class="track-toolbar"><span id="selection-count"></span><button id="start-job" class="button button-primary" type="button">Prepare selected audio <span aria-hidden="true">→</span></button></div>
       <div id="preview-tracks" class="track-list"></div>
       <p class="fine-print">Spotify provides metadata, not audio files. Soundloom searches authorized sources automatically; review uncertain matches or attach an audio file you can use.</p>
@@ -102,7 +106,7 @@
       </div>
     </section>
   </main>
-  <footer><span>Soundloom</span><span>Spotify metadata · openly licensed or user-supplied audio</span></footer>
+  <footer><span>Soundloom</span><span>Spotify metadata · openly licensed or user-supplied audio · <a href="/terms.html">Terms of Use</a></span></footer>
   <script src="/app.js" defer></script>
 </body>
 </html>
