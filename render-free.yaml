@@ -12,7 +12,7 @@ services:
       - key: MAX_UPLOAD_BYTES
         value: "67108864"
       - key: MAX_TRACKS_PER_JOB
-        value: "30"
+        value: "100"
       - key: MAX_ENCODERS
         value: "1"
       - key: ARCHIVE_SEARCH_CONCURRENCY
