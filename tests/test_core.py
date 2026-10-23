@@ -490,14 +490,22 @@ def test_job_creation_starts_authorized_source_search(tmp_path, monkeypatch):
         }],
     })
     with TestClient(main.app) as client:
-        response = client.post("/api/jobs", json={
-            "analysis_id": analysis_id, "selected_indices": [1], "format": "mp3", "bitrate": "192",
-        })
+        request = {
+            "analysis_id": analysis_id, "selected_indices": [1],
+            "format": "mp3", "bitrate": "192",
+        }
+        response = client.post("/api/jobs", json=request)
+        assert response.status_code == 400
+        assert "terms of use" in response.json()["detail"]
+        response = client.post("/api/jobs", json={**request, "terms_accepted": True})
         assert response.status_code == 200
         payload = response.json()
         assert payload["job"]["tracks"][0]["status"] == "searching"
         job_id = payload["job"]["id"]
         track_id = payload["job"]["tracks"][0]["id"]
+        stored_job = main.store.job(job_id)
+        assert stored_job["terms_version"] == main.TERMS_VERSION
+        assert stored_job["terms_accepted_at"] is not None
         assert started == [(job_id, track_id)]
         candidate = {
             "id": "b" * 32, "title": "Sample Song", "artist": "The Example",
