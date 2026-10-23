@@ -69,10 +69,18 @@ h1 span { background: linear-gradient(94deg, #f1a1bd 5%, #c9a7ff 88%); -webkit-b
 .track-copy span { color: #aaa3ac; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 11px; }
 .track-duration { color: #8c858f; font-size: 11px; font-variant-numeric: tabular-nums; }
 .fine-print { color: #8c838e; font-size: 11px; line-height: 1.5; margin: 17px 0 0; }
-.usage-agreement { display: flex; margin: 16px 0 12px; padding: 12px; border: 1px solid #c19be52c; border-radius: 12px; background: #ffffff06; }
-.usage-agreement input { flex: 0 0 auto; width: 17px; height: 17px; margin: 2px 10px 0 0; accent-color: #c7a1f3; }
-.usage-agreement span { color: #c1bbc4; font-size: 11px; line-height: 1.55; }
-.usage-agreement a, footer a { color: #ceb3ed; text-decoration: underline; text-underline-offset: 2px; }
+.terms-gate { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 20px; background: rgba(7,7,10,.82); -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px); }
+.terms-gate[hidden] { display: none; }
+.terms-gate-card { width: min(100%, 500px); padding: clamp(23px, 6vw, 36px); border: 1px solid #ffffff17; border-radius: 22px; background: linear-gradient(145deg, #211e27, #121217); box-shadow: 0 24px 90px #000a; }
+.terms-gate-card h2 { margin: 10px 0 12px; font-size: clamp(24px, 6vw, 32px); letter-spacing: -.9px; }
+.terms-gate-card p { color: #b9b1bd; font-size: 13px; line-height: 1.6; }
+.terms-gate-card > p > a, footer a { color: #ceb3ed; text-decoration: underline; text-underline-offset: 2px; }
+.terms-check { display: flex; align-items: flex-start; gap: 11px; margin: 20px 0 10px; padding: 13px; border: 1px solid #c19be52c; border-radius: 12px; background: #ffffff06; }
+.terms-check input { flex: 0 0 auto; width: 18px; height: 18px; margin: 1px 0 0; accent-color: #c7a1f3; }
+.terms-check span { color: #e5dfe7; font-size: 12px; line-height: 1.55; }
+.terms-error { min-height: 19px; margin: 6px 0 11px !important; color: var(--danger) !important; font-size: 12px !important; }
+.terms-gate-card > .button { width: 100%; }
+.terms-record-note { margin: 13px 0 0; color: #8f8893 !important; font-size: 10px !important; }
 .terms-page { max-width: 780px; margin: 55px auto; padding: 25px; }
 .terms-page h1 { margin: 12px 0; font-size: clamp(32px, 6vw, 48px); }
 .terms-page h2 { margin: 27px 0 8px; font-size: 17px; }
