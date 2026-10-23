@@ -22,6 +22,10 @@ class Store:
                     bitrate TEXT, status TEXT NOT NULL, created_at REAL NOT NULL,
                     error TEXT, terms_version TEXT NOT NULL DEFAULT '', terms_accepted_at REAL
                 );
+                CREATE TABLE IF NOT EXISTS terms_acceptances (
+                    session_hash TEXT PRIMARY KEY, terms_version TEXT NOT NULL,
+                    accepted_at REAL NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS tracks (
                     id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
                     position INTEGER NOT NULL, spotify_id TEXT, title TEXT NOT NULL,
@@ -59,6 +63,22 @@ class Store:
     @staticmethod
     def hash_token(token: str) -> str:
         return hashlib.sha256(token.encode()).hexdigest()
+
+    def accept_terms(self, token: str, terms_version: str, accepted_at: float) -> None:
+        with self.lock, self.db:
+            self.db.execute(
+                "INSERT INTO terms_acceptances(session_hash,terms_version,accepted_at) VALUES(?,?,?) "
+                "ON CONFLICT(session_hash) DO UPDATE SET terms_version=excluded.terms_version, accepted_at=excluded.accepted_at",
+                (self.hash_token(token), terms_version, accepted_at),
+            )
+
+    def terms_acceptance(self, token: str) -> dict[str, Any] | None:
+        with self.lock:
+            row = self.db.execute(
+                "SELECT terms_version,accepted_at FROM terms_acceptances WHERE session_hash=?",
+                (self.hash_token(token),),
+            ).fetchone()
+            return dict(row) if row else None
 
     def create_job(self, job: dict[str, Any], token: str, tracks: list[dict[str, Any]]) -> None:
         with self.lock, self.db:

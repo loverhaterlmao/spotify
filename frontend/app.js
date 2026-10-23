@@ -5,6 +5,7 @@ const previewSection = $("#preview-section");
 const jobSection = $("#job-section");
 let analysis = null;
 let activeJob = null;
+let termsAccepted = false;
 let pollTimer = null;
 const uploads = new Map();
 const expandedSources = new Set();
@@ -34,7 +35,6 @@ function setMessage(text, error = false) {
 }
 function renderPreview(data) {
   analysis = data;
-  $("#terms-accepted").checked = false;
   previewSection.hidden = false;
   jobSection.hidden = true;
   $("#collection-kind").textContent = data.kind.toUpperCase();
@@ -62,11 +62,51 @@ function renderPreview(data) {
 function updateSelection() {
   const selected = [...document.querySelectorAll(".track-check:checked")].length;
   $("#selection-count").textContent = selected + " selected";
-  $("#start-job").disabled = !selected || !analysis || !$("#terms-accepted").checked;
+  $("#start-job").disabled = !termsAccepted || !selected || !analysis;
   $("#select-all").textContent = selected ? "Deselect all" : "Select all";
 }
+function setTermsAccepted() {
+  termsAccepted = true;
+  $("#terms-gate").hidden = true;
+  $("#app-shell").removeAttribute("inert");
+  $("#app-shell").removeAttribute("aria-hidden");
+  $("#terms-error").textContent = "";
+  updateSelection();
+}
+$("#terms-accept-checkbox").addEventListener("change", (event) => {
+  $("#terms-accept-button").disabled = !event.target.checked || termsAccepted;
+});
+$("#terms-accept-button").addEventListener("click", async () => {
+  const button = $("#terms-accept-button");
+  if (!$("#terms-accept-checkbox").checked || termsAccepted) return;
+  button.disabled = true;
+  $("#terms-error").textContent = "Saving your agreement…";
+  try {
+    const response = await fetch("/api/terms/accept", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({accepted: true})
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.detail || "Could not save your agreement.");
+    setTermsAccepted();
+  } catch (error) {
+    $("#terms-error").textContent = error.message || "Could not save your agreement. Please try again.";
+    button.disabled = !$("#terms-accept-checkbox").checked;
+  }
+});
+async function loadTermsStatus() {
+  try {
+    const response = await fetch("/api/terms/status");
+    if (!response.ok) throw new Error("Could not check the current terms.");
+    const status = await response.json();
+    if (status.accepted) setTermsAccepted();
+  } catch (error) {
+    $("#terms-error").textContent = error.message || "Could not check the current terms. Please try again.";
+  }
+}
+loadTermsStatus();
 document.addEventListener("change", (event) => {
-  if (event.target.matches(".track-check") || event.target.id === "terms-accepted") updateSelection();
+  if (event.target.matches(".track-check")) updateSelection();
   if (event.target.id === "format-select") {
     $("#bitrate-setting").hidden = event.target.value !== "mp3";
   }
@@ -135,7 +175,6 @@ $("#start-job").addEventListener("click", async () => {
       method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({
         analysis_id: analysis.analysis_id, selected_indices,
-        terms_accepted: $("#terms-accepted").checked,
         format: $("#format-select").value, bitrate: $("#bitrate-select").value
       })
     });

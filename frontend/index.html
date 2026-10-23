@@ -11,6 +11,7 @@
   <title>Soundloom — playlist audio studio</title>
 </head>
 <body>
+  <div id="app-shell" aria-hidden="true" inert>
   <div class="ambient ambient-one"></div><div class="ambient ambient-two"></div>
   <header class="topbar">
     <a class="brand" href="/" aria-label="Soundloom home"><span class="brand-mark" aria-hidden="true">s</span><span>soundloom</span></a>
@@ -73,10 +74,6 @@
         <div class="collection-info"><div class="eyebrow" id="collection-kind"></div><h2 id="collection-name"></h2><p id="collection-summary"></p></div>
         <button id="select-all" class="button button-quiet button-small" type="button">Deselect all</button>
       </div>
-      <label class="usage-agreement">
-        <input id="terms-accepted" type="checkbox">
-        <span>I have permission to download and process the audio I select. I agree to the <a href="/terms.html" target="_blank" rel="noopener noreferrer">Terms of Use</a> and will not use Soundloom for unauthorized copying, distribution, or DRM circumvention.</span>
-      </label>
       <div class="track-toolbar"><span id="selection-count"></span><button id="start-job" class="button button-primary" type="button">Prepare selected audio <span aria-hidden="true">→</span></button></div>
       <div id="preview-tracks" class="track-list"></div>
       <p class="fine-print">Spotify provides metadata, not audio files. Soundloom searches authorized sources automatically; review uncertain matches or attach an audio file you can use.</p>
@@ -106,7 +103,20 @@
       </div>
     </section>
   </main>
-  <footer><span>Soundloom</span><span>Spotify metadata · openly licensed or user-supplied audio · <a href="/terms.html">Terms of Use</a></span></footer>
+  <footer><span>Soundloom</span><span>Spotify metadata · authorized sources and user-supplied audio · <a href="/terms.html">Terms of Use</a></span></footer>
+  </div>
+  <section id="terms-gate" class="terms-gate" role="dialog" aria-modal="true" aria-labelledby="terms-title">
+    <div class="terms-gate-card">
+      <div class="eyebrow">BEFORE YOU BEGIN</div>
+      <h2 id="terms-title">Agree to the Terms of Use</h2>
+      <p>Use Soundloom only with audio you own or have permission to download and process. Unauthorized copying, distribution, DRM circumvention, and violations of source terms are prohibited.</p>
+      <p><a href="/terms.html" target="_blank" rel="noopener noreferrer">Read the full Terms of Use</a></p>
+      <label class="terms-check"><input id="terms-accept-checkbox" type="checkbox"><span>I agree to the Terms of Use and accept responsibility for my use of this service.</span></label>
+      <p id="terms-error" class="terms-error" role="status"></p>
+      <button id="terms-accept-button" class="button button-primary" type="button" disabled>Agree and continue</button>
+      <p class="terms-record-note">We record the terms version and acceptance time using a random browser cookie. You’ll only need to accept again if the terms change or you clear browser cookies.</p>
+    </div>
+  </section>
   <script src="/app.js" defer></script>
 </body>
 </html>

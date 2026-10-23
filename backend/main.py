@@ -33,7 +33,7 @@ from .playlist_import import PlaylistImportError, parse_playlist_csv
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("spotify-audio")
-TERMS_VERSION = "2026-10-23"
+TERMS_VERSION = "2026-10-23.2"
 analyses: dict[str, tuple[float, dict]] = {}
 track_tasks: dict[str, asyncio.Task] = {}
 archive_locks: dict[str, asyncio.Lock] = {}
@@ -64,18 +64,29 @@ class AnalyzeRequest(BaseModel):
     url: str = Field(min_length=1, max_length=2048)
 
 
+class TermsAcceptanceRequest(BaseModel):
+    accepted: bool
+
+
 class CreateJobRequest(BaseModel):
     analysis_id: str = Field(min_length=20, max_length=80)
     selected_indices: list[int] = Field(min_length=1, max_length=300)
     format: Literal["original", "mp3", "aac", "flac", "wav", "alac", "opus"] = "original"
     bitrate: Literal["128", "192", "256", "320"] | None = "320"
-    terms_accepted: bool = False
 
 
 def database() -> Store:
     if store is None:
         raise HTTPException(503, "The job database is starting.")
     return store
+
+
+def require_terms_acceptance(request: Request) -> dict:
+    token = request.cookies.get("soundloom_terms")
+    acceptance = database().terms_acceptance(token) if token else None
+    if not acceptance or acceptance["terms_version"] != TERMS_VERSION:
+        raise HTTPException(403, "Accept the current Soundloom terms of use before using this feature.")
+    return acceptance
 
 
 def require_job(job_id: str, token: str | None) -> dict:
@@ -690,6 +701,31 @@ async def security_headers(request: Request, call_next):
     return response
 
 
+@app.get("/api/terms/status")
+async def terms_status(request: Request):
+    token = request.cookies.get("soundloom_terms")
+    acceptance = database().terms_acceptance(token) if token else None
+    accepted = bool(acceptance and acceptance["terms_version"] == TERMS_VERSION)
+    return {"accepted": accepted, "terms_version": TERMS_VERSION}
+
+
+@app.post("/api/terms/accept")
+async def accept_terms(body: TermsAcceptanceRequest, request: Request):
+    throttle(request, "terms", 10)
+    if not body.accepted:
+        raise HTTPException(400, "Confirm the terms to continue.")
+    token = request.cookies.get("soundloom_terms") or secrets.token_urlsafe(32)
+    accepted_at = time.time()
+    database().accept_terms(token, TERMS_VERSION, accepted_at)
+    response = JSONResponse({"accepted": True, "terms_version": TERMS_VERSION})
+    response.set_cookie(
+        "soundloom_terms", token, httponly=True,
+        secure=request.url.scheme == "https" or settings.public_base_url.startswith("https://"),
+        samesite="lax", max_age=365 * 24 * 60 * 60, path="/",
+    )
+    return response
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "spotify_configured": spotify.enabled}
@@ -759,6 +795,7 @@ def cache_analysis(result: dict) -> dict:
 @app.post("/api/analyze")
 async def analyze(body: AnalyzeRequest, request: Request):
     throttle(request, "analyze", 20)
+    require_terms_acceptance(request)
     session_id = request.cookies.get("spotify_session")
     try:
         result = await spotify.resolve(body.url, session_id, settings.max_tracks)
@@ -772,6 +809,7 @@ async def analyze(body: AnalyzeRequest, request: Request):
 @app.post("/api/analyze/csv")
 async def analyze_csv(request: Request, file: UploadFile = File(...)):
     throttle(request, "analyze", 20)
+    require_terms_acceptance(request)
     if Path(file.filename or "").suffix.lower() != ".csv":
         await file.close()
         raise HTTPException(415, "Choose a .csv playlist export.")
@@ -791,8 +829,7 @@ async def analyze_csv(request: Request, file: UploadFile = File(...)):
 @app.post("/api/jobs")
 async def create_job(body: CreateJobRequest, request: Request):
     throttle(request, "create", 10)
-    if not body.terms_accepted:
-        raise HTTPException(400, "Accept the Soundloom terms of use before preparing audio.")
+    acceptance = require_terms_acceptance(request)
     cached = analyses.pop(body.analysis_id, None)
     if not cached or time.time() - cached[0] > 3600:
         raise HTTPException(400, "The preview expired. Analyze the Spotify link again.")
@@ -834,8 +871,8 @@ async def create_job(body: CreateJobRequest, request: Request):
     job = {
         "id": job_id, "name": result["name"], "artwork": result["artwork"], "kind": result["kind"],
         "format": body.format, "bitrate": body.bitrate if body.format == "mp3" else None,
-        "created_at": time.time(), "terms_version": TERMS_VERSION,
-        "terms_accepted_at": time.time(),
+        "created_at": time.time(), "terms_version": acceptance["terms_version"],
+        "terms_accepted_at": acceptance["accepted_at"],
     }
     database().create_job(job, job_token, rows)
     (settings.data_dir / "jobs" / job_id / "input").mkdir(parents=True, exist_ok=True)
