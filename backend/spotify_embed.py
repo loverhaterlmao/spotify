@@ -103,7 +103,7 @@ def _duration_ms(value):
     return seconds * 1000 if seconds > 0 else None
 
 
-def parse_embed_html(kind: str, item_id: str, body: str, max_tracks: int = 50) -> dict:
+def parse_embed_html(kind: str, item_id: str, body: str, max_tracks: int = 300) -> dict:
     parser = _EmbedParser()
     parser.feed(body)
     parser.close()
@@ -150,7 +150,7 @@ def parse_embed_html(kind: str, item_id: str, body: str, max_tracks: int = 50) -
             if normalized_rows:
                 rows = normalized_rows
     if len(rows) > max_tracks:
-        raise SpotifyError(f"This public Spotify embed exceeds the {max_tracks}-track limit. Import a CSV instead.")
+        raise SpotifyError(f"This public Spotify embed exceeds the {max_tracks}-track limit supported by this deployment. Split it into smaller playlists.")
     if not rows and kind == "track" and parser.entity_title:
         rows = [{
             "position": 1,
@@ -206,4 +206,4 @@ async def fetch_public_embed(client: httpx.AsyncClient, kind: str, item_id: str,
         html = bytes(body).decode("utf-8")
     except UnicodeDecodeError as exc:
         raise SpotifyError("Spotify returned invalid embed metadata.") from exc
-    return parse_embed_html(kind, item_id, html, min(max_tracks, 50))
+    return parse_embed_html(kind, item_id, html, min(max_tracks, 300))
